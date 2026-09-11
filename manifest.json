@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.astorrer.omarchy-coros",
+  "name": "Omarchy-coros",
+  "version": "0.1.0",
+  "author": "Aaron Storrer",
+  "license": "MIT",
+  "description": "COROS recovery metrics on the Omarchy bar. Shows HRV vs baseline, resting heart rate, training load, and the last activity from your COROS Training Hub account.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "COROS",
+    "description": "COROS recovery metrics: HRV, resting heart rate, training load, and last activity.",
+    "category": "Health",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30,
+      "region": "eu",
+      "hideWhenNoData": false
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 120,
+        "step": 1,
+        "defaultValue": 30
+      },
+      {
+        "key": "region",
+        "type": "string",
+        "label": "COROS region (eu or us)",
+        "defaultValue": "eu"
+      },
+      {
+        "key": "hideWhenNoData",
+        "type": "boolean",
+        "label": "Hide when no data available",
+        "defaultValue": false
+      }
+    ]
+  }
+}
