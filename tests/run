@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Run the checks that should stay green on main.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+failed=0
+
+run() {
+  local name=$1
+  shift
+  echo "==> $name"
+  if "$@"; then
+    echo "ok $name"
+  else
+    echo "FAIL $name"
+    failed=1
+  fi
+}
+
+if command -v ruff >/dev/null 2>&1; then
+  run "ruff" ruff check .
+else
+  echo "skip ruff (ruff not on PATH)"
+fi
+
+run "manifest" python3 - <<'EOF'
+import json
+from pathlib import Path
+
+ROOT = Path("manifest.json").resolve().parent
+manifest = json.loads((ROOT / "manifest.json").read_text())
+
+
+def check(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+check(manifest.get("schemaVersion") == 1, "schemaVersion must be 1")
+check(
+    manifest.get("id") == "io.github.astorrer.omarchy-coros",
+    "id must stay namespaced as io.github.astorrer.omarchy-coros",
+)
+check(
+    __import__("re").fullmatch(r"\d+\.\d+\.\d+", manifest.get("version", "")),
+    "version must be semver",
+)
+check(manifest.get("license") == "MIT", "license must be MIT")
+check(manifest.get("kinds") == ["bar-widget"], "kinds must be ['bar-widget']")
+
+entry_points = manifest.get("entryPoints") or {}
+check(
+    entry_points.get("barWidget") == "BarWidget.qml",
+    "entryPoints.barWidget must be BarWidget.qml (owned by feat/ui)",
+)
+
+bar_widget = manifest.get("barWidget") or {}
+for key in ("displayName", "category", "allowMultiple"):
+    check(key in bar_widget, f"barWidget.{key} is required")
+
+defaults = bar_widget.get("defaults") or {}
+schema = bar_widget.get("schema") or []
+schema_keys = [item.get("key") for item in schema]
+check(sorted(schema_keys) == sorted(defaults), "schema keys must match defaults keys")
+check(
+    sorted(schema_keys) == ["hideWhenNoData", "refreshIntervalSec", "region"],
+    "schema keys must be refreshIntervalSec, region, hideWhenNoData",
+)
+for item in schema:
+    check("type" in item and "label" in item, f"schema entry {item.get('key')} needs type and label")
+    check(item["key"] in defaults, f"schema key {item['key']} missing from defaults")
+
+by_key = {item["key"]: item for item in schema}
+refresh = by_key["refreshIntervalSec"]
+check(refresh["type"] == "integer", "refreshIntervalSec must be integer")
+check(refresh.get("min") == 5 and refresh.get("max") == 120, "refreshIntervalSec must span 5-120")
+check(refresh.get("defaultValue") == 30 and defaults["refreshIntervalSec"] == 30, "refreshIntervalSec default must be 30")
+region = by_key["region"]
+check(region["type"] == "string", "region must be string")
+check(region.get("defaultValue") == "eu" and defaults["region"] == "eu", "region default must be eu")
+hide = by_key["hideWhenNoData"]
+check(hide["type"] == "boolean", "hideWhenNoData must be boolean")
+check(hide.get("defaultValue") is False and defaults["hideWhenNoData"] is False, "hideWhenNoData default must be false")
+
+# QML settings-sync check belongs to feat/ui: the entry point and panel do
+# not exist on feat/scaffold, so only note the expectation here.
+if (ROOT / "BarWidget.qml").is_file():
+    qml_source = (ROOT / "BarWidget.qml").read_text()
+    if (ROOT / "Panel.qml").is_file():
+        qml_source += (ROOT / "Panel.qml").read_text()
+    for key in schema_keys:
+        check(f'"{key}"' in qml_source, f"settings key {key} must be read somewhere in the QML")
+else:
+    print("skip qml-sync (BarWidget.qml owned by feat/ui, not present yet)")
+
+print("manifest ok")
+EOF
+
+# Hook owned by feat/api-client: run the mocked unit tests when present.
+if [[ -f tests/test_coros.py ]]; then
+  run "coros" python3 tests/test_coros.py
+else
+  echo "skip coros (tests/test_coros.py owned by feat/api-client, not present yet)"
+fi
+
+if command -v omarchy >/dev/null 2>&1; then
+  # omarchy plugin validate requires the entry point to exist; BarWidget.qml
+  # is owned by feat/ui, so treat this as a hook until it lands.
+  if [[ -f BarWidget.qml ]]; then
+    run "plugin-validate" omarchy plugin validate "$ROOT"
+  else
+    echo "skip plugin-validate (BarWidget.qml owned by feat/ui, not present yet)"
+  fi
+else
+  echo "skip plugin-validate (omarchy not on PATH)"
+fi
+
+# QML lint hooks owned by feat/ui: only lint files that branch owns, when present.
+OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
+QMLLINT=$(command -v qmllint || echo /usr/lib/qt6/bin/qmllint)
+QML_FILES=""
+for f in BarWidget.qml Panel.qml Model.js; do
+  [[ -f $f ]] && QML_FILES="$QML_FILES $f"
+done
+if [[ -n $QML_FILES ]] && [[ -x $QMLLINT ]] && [[ -d $OMARCHY_PATH/shell ]]; then
+  # Quickshell exposes the shell directory as the "qs" module; map it so
+  # qs.Commons/qs.Ui resolve and the shell types get real linting.
+  lint_dir=$(mktemp -d)
+  ln -s "$OMARCHY_PATH/shell" "$lint_dir/qs"
+  # shellcheck disable=SC2086
+  run "qmllint" "$QMLLINT" -I "$lint_dir" -I "$OMARCHY_PATH/shell" $QML_FILES
+  rm -rf "$lint_dir"
+else
+  echo "skip qmllint"
+fi
+
+if (( failed )); then
+  echo "tests failed"
+  exit 1
+fi
+echo "all ok"
