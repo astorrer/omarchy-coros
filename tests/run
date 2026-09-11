@@ -105,12 +105,17 @@ else
 fi
 
 if command -v omarchy >/dev/null 2>&1; then
-  # omarchy plugin validate requires the entry point to exist; BarWidget.qml
-  # is owned by feat/ui, so treat this as a hook until it lands.
   if [[ -f BarWidget.qml ]]; then
-    run "plugin-validate" omarchy plugin validate "$ROOT"
+    # Validate what ships: tracked + work-in-progress files, minus ignored
+    # machinery (.opencode/node_modules symlinks trip the validator but never
+    # ship via git).
+    validate_dir=$(mktemp -d)
+    while IFS= read -r -d ''; do cp --parents "$REPLY" "$validate_dir"; done \
+      < <(git ls-files -z --cached --others --exclude-standard)
+    run "plugin-validate" omarchy plugin validate "$validate_dir"
+    rm -rf "$validate_dir"
   else
-    echo "skip plugin-validate (BarWidget.qml owned by feat/ui, not present yet)"
+    echo "skip plugin-validate (BarWidget.qml not present yet)"
   fi
 else
   echo "skip plugin-validate (omarchy not on PATH)"
