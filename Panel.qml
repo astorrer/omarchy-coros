@@ -71,6 +71,10 @@ Panel {
     root.view = "settings"
   }
 
+  function openProject() {
+    Qt.openUrlExternally(Model.PROJECT_URL)
+  }
+
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
       return root.bar.switchPanelFrom(root.hostWidget || root, direction)
@@ -282,6 +286,12 @@ Panel {
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption
               Layout.alignment: Qt.AlignVCenter
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.openProject()
+              }
             }
 
             Item {

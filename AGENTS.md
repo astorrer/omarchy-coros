@@ -30,7 +30,9 @@ mocked HTTP only — no network, ever.
 - Short-lived feature branches (`feat/scaffold`, `feat/api-client`, `feat/ui`)
   merge to `main` with the file ownership in `PLAN.md` — no overlap.
 - Keep `CHANGELOG.md` updated for user-facing changes.
-- Bump `version` in `manifest.json` when releasing.
+- Release flow (konnectarchy pattern): bump `version` in `manifest.json` and
+  `PLUGIN_VERSION` in `Model.js` together (tests enforce they match), update
+  `CHANGELOG.md`, commit, then push an annotated tag `vX.Y.Z`.
 - Match the existing style: concise code, no speculative abstractions, no
   comments unless they earn their place.
 - Do not commit secrets (never `COROS_EMAIL` / `COROS_PASSWORD`, never the

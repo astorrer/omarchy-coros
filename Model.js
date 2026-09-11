@@ -1,6 +1,7 @@
 .pragma library
 
 var PLUGIN_VERSION = "0.1.0"
+var PROJECT_URL = "https://github.com/astorrer/omarchy-coros"
 
 function parseJson(raw) {
   try {

@@ -83,8 +83,7 @@ hide = by_key["hideWhenNoData"]
 check(hide["type"] == "boolean", "hideWhenNoData must be boolean")
 check(hide.get("defaultValue") is False and defaults["hideWhenNoData"] is False, "hideWhenNoData default must be false")
 
-# QML settings-sync check belongs to feat/ui: the entry point and panel do
-# not exist on feat/scaffold, so only note the expectation here.
+# Every settings key must be read somewhere in the QML.
 if (ROOT / "BarWidget.qml").is_file():
     qml_source = (ROOT / "BarWidget.qml").read_text()
     if (ROOT / "Panel.qml").is_file():
@@ -92,16 +91,29 @@ if (ROOT / "BarWidget.qml").is_file():
     for key in schema_keys:
         check(f'"{key}"' in qml_source, f"settings key {key} must be read somewhere in the QML")
 else:
-    print("skip qml-sync (BarWidget.qml owned by feat/ui, not present yet)")
+    print("skip qml-sync (BarWidget.qml not present)")
+
+# Footer version must track the manifest (konnectarchy pattern): the panel
+# shows "COROS " + Model.PLUGIN_VERSION, clickable to the project URL.
+model_js = (ROOT / "Model.js").read_text()
+version_match = __import__("re").search(r'PLUGIN_VERSION = "([^"]+)"', model_js)
+check(version_match, "PLUGIN_VERSION missing from Model.js")
+check(version_match.group(1) == manifest.get("version"), "Model.js PLUGIN_VERSION must equal manifest version")
+check('PROJECT_URL = "https://github.com/astorrer/omarchy-coros"' in model_js, "Model.js PROJECT_URL must point at the repo")
 
 print("manifest ok")
 EOF
 
-# Hook owned by feat/api-client: run the mocked unit tests when present.
 if [[ -f tests/test_coros.py ]]; then
   run "coros" python3 tests/test_coros.py
 else
-  echo "skip coros (tests/test_coros.py owned by feat/api-client, not present yet)"
+  echo "skip coros (tests/test_coros.py not present)"
+fi
+
+if [[ -f tests/test_install.py ]]; then
+  run "install" python3 tests/test_install.py
+else
+  echo "skip install (tests/test_install.py not present)"
 fi
 
 if command -v omarchy >/dev/null 2>&1; then
@@ -115,7 +127,7 @@ if command -v omarchy >/dev/null 2>&1; then
     run "plugin-validate" omarchy plugin validate "$validate_dir"
     rm -rf "$validate_dir"
   else
-    echo "skip plugin-validate (BarWidget.qml not present yet)"
+    echo "skip plugin-validate (BarWidget.qml not present)"
   fi
 else
   echo "skip plugin-validate (omarchy not on PATH)"
