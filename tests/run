@@ -116,6 +116,12 @@ else
   echo "skip install (tests/test_install.py not present)"
 fi
 
+if [[ -f tests/test_setup.py ]]; then
+  run "setup" python3 tests/test_setup.py
+else
+  echo "skip setup (tests/test_setup.py not present)"
+fi
+
 if command -v omarchy >/dev/null 2>&1; then
   if [[ -f BarWidget.qml ]]; then
     # Validate what ships: tracked + work-in-progress files, minus ignored
