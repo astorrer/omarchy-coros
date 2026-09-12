@@ -43,12 +43,17 @@ mocked HTTP only — no network, ever.
 
 ## Scope notes
 
-- `setup.sh` is user-facing; `uninstall` must only remove files this plugin
-  wrote (see the marker comment in the file).
+- `setup.sh` is user-facing: it prompts for credentials, writes
+  `~/.config/omarchy-coros/credentials` (0600), and tests the login. It must
+  never print the password. `uninstall` must only remove files this plugin
+  wrote (dev symlink, credentials file, token cache).
 - Settings keys in `manifest.json` `barWidget.schema` must stay in sync with
   the QML that reads them (`refreshIntervalSec`, `region`,
   `hideWhenNoData`).
 - `coros.py snapshot` prints `{"hrv":42,"hrvBaseline":45,"rhr":48,"load":85,
-  "sleepH":7.2,"activity":"Run 10k"}`. All keys optional; missing data is
-  null, never an error exit for display. QML polls `coros.py snapshot` and
-  honors `refreshIntervalSec` / `hideWhenNoData`.
+  "sleepH":7.2,"activity":"Run 10k","error":null}`. Metrics are null when
+  missing; `error` is null, "auth" (bad/missing login — widget shows the
+  setup hint, polls back off for an hour), or "network". Never a non-zero
+  exit for display. Credentials: env wins, credentials file is the fallback.
+  QML polls `coros.py snapshot` and honors `refreshIntervalSec` /
+  `hideWhenNoData`.

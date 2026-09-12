@@ -1,12 +1,15 @@
 #!/bin/bash
-# No system dependencies: coros.py is stdlib-only. `setup.sh uninstall` only
-# removes what this plugin wrote (the dev symlink and the token cache); it
-# never touches credentials (those live only in COROS_EMAIL / COROS_PASSWORD,
-# never on disk).
+# No system dependencies: coros.py is stdlib-only. Prompts for COROS
+# credentials, stores them in ~/.config/omarchy-coros/credentials (0600),
+# and tests the login before finishing. `setup.sh uninstall` only removes
+# what this plugin wrote (the dev symlink, the credentials file, and the
+# token cache).
 set -euo pipefail
 
 PLUGIN_ID="io.github.astorrer.omarchy-coros"
 LINK_DIR="$HOME/.config/omarchy/plugins"
+CONF_DIR="$HOME/.config/omarchy-coros"
+CREDS="$CONF_DIR/credentials"
 
 uninstall() {
   if [[ -L $LINK_DIR/$PLUGIN_ID ]]; then
@@ -21,9 +24,12 @@ uninstall() {
   else
     echo "No omarchy-coros cache found."
   fi
-  echo
-  echo "Left in place (yours to decide):"
-  echo "  - COROS_EMAIL / COROS_PASSWORD env vars"
+  if [[ -f $CREDS ]]; then
+    rm "$CREDS"
+    echo "Removed $CREDS"
+  else
+    echo "No credentials file found."
+  fi
 }
 
 if [[ ${1:-} == uninstall ]]; then
@@ -53,6 +59,54 @@ else
 fi
 
 echo
-echo "Omarchy-coros is ready. Export COROS_EMAIL and COROS_PASSWORD where the"
-echo "bar process can see them, then add the widget: region defaults to eu,"
-echo "switch to us in the widget settings if your COROS account lives there."
+echo "COROS login (stored in $CREDS, mode 0600 — never in git)."
+echo "Leave blank to keep an existing value."
+if [[ -f $CREDS ]]; then
+  COROS_EMAIL=$(grep "^COROS_EMAIL=" "$CREDS" | cut -d= -f2- || true)
+  COROS_REGION=$(grep "^COROS_REGION=" "$CREDS" | cut -d= -f2- || true)
+fi
+read -r -p "COROS email [${COROS_EMAIL:-}]: " email
+email=${email:-${COROS_EMAIL:-}}
+read -r -s -p "COROS password: " password
+echo
+read -r -p "Region (eu/us) [${COROS_REGION:-eu}]: " region
+region=$(echo "${region:-${COROS_REGION:-eu}}" | tr "[:upper:]" "[:lower:]")
+if [[ $region != eu && $region != us ]]; then
+  echo "Region must be eu or us." >&2
+  exit 1
+fi
+if [[ -z $email ]]; then
+  echo "Email is required." >&2
+  exit 1
+fi
+
+mkdir -p "$CONF_DIR"
+umask 077
+if [[ -n $password ]]; then
+  printf "COROS_EMAIL=%s\nCOROS_PASSWORD=%s\nCOROS_REGION=%s\n" "$email" "$password" "$region" > "$CREDS"
+else
+  printf "COROS_EMAIL=%s\nCOROS_REGION=%s\n" "$email" "$region" > "$CREDS"
+  if ! grep -q "^COROS_PASSWORD=" "$CREDS"; then
+    echo "No password on file and none entered." >&2
+    exit 1
+  fi
+fi
+chmod 600 "$CREDS"
+echo "Wrote $CREDS"
+
+echo
+echo "Testing login (single attempt — failures here never trigger polling)..."
+if [[ -z $password ]]; then
+  password=$(grep "^COROS_PASSWORD=" "$CREDS" | cut -d= -f2- || true)
+fi
+export COROS_EMAIL="$email" COROS_PASSWORD="$password" COROS_REGION="$region"
+out=$(python3 "$ROOT/coros.py" snapshot --region "$region")
+echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); print('error:', d.get('error')); print({k: d.get(k) for k in ('hrv','hrvBaseline','rhr','load','sleepH','activity')})"
+if echo "$out" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('error') is None else 1)"; then
+  echo
+  echo "Login works. Add the COROS widget to the bar."
+else
+  echo
+  echo "Login failed — check the email/password, or try the other region." >&2
+  exit 1
+fi

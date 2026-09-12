@@ -7,9 +7,13 @@ metrics as JSON for the bar widget to poll:
     coros.py snapshot [--region eu|us]
     coros.py watch [--region eu|us] [--interval N]
 
-Credentials come from COROS_EMAIL / COROS_PASSWORD and are never stored;
-the access token is cached in ~/.cache/omarchy-coros/token.json. One-shot
-commands print exactly one JSON object on stdout; watch streams NDJSON.
+Credentials come from COROS_EMAIL / COROS_PASSWORD, or from the setup.sh
+credentials file (~/.config/omarchy-coros/credentials, mode 0600); the
+password is never stored, only the access token is cached in
+~/.cache/omarchy-coros/token.json. After logins fail on both regions,
+further polls back off for an hour so a widget polling on a timer cannot
+lock the account. One-shot commands print exactly one JSON object on
+stdout; watch streams NDJSON.
 """
 
 import hashlib
@@ -35,7 +39,12 @@ NULL_SNAPSHOT = {
     "load": None,
     "sleepH": None,
     "activity": None,
+    "error": None,  # null | "auth" | "network"
 }
+
+# After logins fail on both regions, stop hitting the API for a while so a
+# widget polling every 30s cannot lock the account with wrong credentials.
+COOLDOWN_S = 3600
 
 
 def eprint(msg):
@@ -46,6 +55,64 @@ def eprint(msg):
 def cache_file():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
     return os.path.join(base, "omarchy-coros", "token.json")
+
+
+def config_dir():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "omarchy-coros")
+
+
+def read_config_file():
+    """KEY=value pairs from the setup.sh credentials file (0600)."""
+    values = {}
+    try:
+        with open(os.path.join(config_dir(), "credentials"), encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                values[key.strip()] = value.strip().strip("\"'")
+    except OSError:
+        pass
+    return values
+
+
+def credentials():
+    """Env wins; the setup.sh credentials file is the fallback."""
+    config = read_config_file()
+    email = os.environ.get("COROS_EMAIL") or config.get("COROS_EMAIL")
+    password = os.environ.get("COROS_PASSWORD") or config.get("COROS_PASSWORD")
+    return email or None, password or None
+
+
+def cooldown_file():
+    return os.path.join(os.path.dirname(cache_file()), "auth_cooldown")
+
+
+def cooldown_active():
+    try:
+        age = time.time() - os.stat(cooldown_file()).st_mtime
+        return age >= 0 and age < COOLDOWN_S
+    except OSError:
+        return False
+
+
+def trip_cooldown():
+    try:
+        parent = os.path.dirname(cooldown_file())
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+        with open(cooldown_file(), "w"):
+            pass
+    except OSError as exc:
+        eprint("coros.py: could not write cooldown marker: " + str(exc))
+
+
+def clear_cooldown():
+    try:
+        os.unlink(cooldown_file())
+    except OSError:
+        pass
 
 
 def load_token():
@@ -145,6 +212,7 @@ def login(email, password, region):
 def ensure_auth(email, password, region):
     cached = load_token()
     if cached is not None:
+        clear_cooldown()
         return cached["access_token"], cached["user_id"], cached["region"]
     return login(email, password, region)
 
@@ -205,6 +273,7 @@ def parse_snapshot(day, activity):
         "load": num(day.get("trainingLoad")),
         "sleepH": round(tib / 60, 1) if tib is not None else None,
         "activity": activity,
+        "error": None,
     }
 
 
@@ -213,11 +282,17 @@ def ymd(ts):
 
 
 def get_snapshot(region):
-    email = os.environ.get("COROS_EMAIL")
-    password = os.environ.get("COROS_PASSWORD")
+    email, password = credentials()
     if not email or not password:
-        eprint("coros.py: set COROS_EMAIL and COROS_PASSWORD")
-        return dict(NULL_SNAPSHOT)
+        eprint("coros.py: no credentials — run setup.sh, or set COROS_EMAIL and COROS_PASSWORD")
+        snap = dict(NULL_SNAPSHOT)
+        snap["error"] = "auth"
+        return snap
+    if cooldown_active():
+        eprint("coros.py: login cooling down after failures — re-run setup.sh to retry now")
+        snap = dict(NULL_SNAPSHOT)
+        snap["error"] = "auth"
+        return snap
     try:
         token, user_id, used = ensure_auth(email, password, region)
         auth = {"token": token, "user_id": user_id, "region": used}
@@ -241,33 +316,38 @@ def get_snapshot(region):
             )
         )
         return parse_snapshot(day, activity)
+    except ValueError as exc:  # login rejected on both regions: back off, don't hammer
+        eprint("coros.py: login failed: " + str(exc))
+        trip_cooldown()
+        snap = dict(NULL_SNAPSHOT)
+        snap["error"] = "auth"
+        return snap
     except Exception as exc:  # noqa: BLE001 - display path always prints valid JSON, never fails
         eprint("coros.py: snapshot failed: " + str(exc))
-        return dict(NULL_SNAPSHOT)
+        snap = dict(NULL_SNAPSHOT)
+        snap["error"] = "network"
+        return snap
 
 
 def resolve_region(flag):
-    region = str(flag if flag else os.environ.get("COROS_REGION") or "eu").strip().lower()
-    return region if region in BASES else None
+    if flag and str(flag).strip().lower() in BASES:
+        return str(flag).strip().lower()
+    env = (os.environ.get("COROS_REGION") or "").strip().lower()
+    if env in BASES:
+        return env
+    conf = read_config_file().get("COROS_REGION", "").strip().lower()
+    return conf if conf in BASES else "eu"
 
 
 def cmd_snapshot(region_flag):
-    region = resolve_region(region_flag)
-    if region is None:
-        eprint("coros.py: region must be eu or us")
-        print(json.dumps(dict(NULL_SNAPSHOT)))
-        return 0
-    print(json.dumps(get_snapshot(region)))
+    print(json.dumps(get_snapshot(resolve_region(region_flag))))
     return 0
 
 
 def cmd_watch(region_flag, interval):
-    region = resolve_region(region_flag)
-    if region is None:
-        eprint("coros.py: region must be eu or us")
     try:
         while True:
-            print(json.dumps(dict(NULL_SNAPSHOT) if region is None else get_snapshot(region)))
+            print(json.dumps(get_snapshot(resolve_region(region_flag))))
             sys.stdout.flush()
             time.sleep(interval)
     except KeyboardInterrupt:

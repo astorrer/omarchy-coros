@@ -8,9 +8,6 @@ load, and the last activity — per-user self-login, nothing hosted.
 
 - A COROS account with data in the Training Hub.
 - `python3` — already on every Omarchy install; the helper is stdlib-only.
-- Credentials in the environment (never in git, never echoed):
-  - `COROS_EMAIL`
-  - `COROS_PASSWORD`
 
 ## Install
 
@@ -18,15 +15,24 @@ load, and the last activity — per-user self-login, nothing hosted.
 omarchy plugin add https://github.com/astorrer/omarchy-coros.git --enable
 ```
 
-Then run the one-time setup from the plugin folder (verifies `python3`, no
-system packages needed):
+Then run setup from the plugin folder. It symlinks the dev install, asks
+for your COROS email/password/region, stores them in
+`~/.config/omarchy-coros/credentials` (mode 0600, never in git), and tests
+the login once before finishing:
 
 ```sh
 ~/.config/omarchy/plugins/io.github.astorrer.omarchy-coros/setup.sh
 ```
 
-Export `COROS_EMAIL` and `COROS_PASSWORD` where the bar process can see them,
-then add the widget to the bar.
+No environment variables needed: the helper reads the credentials file
+itself, so the bar process needs no extra plumbing (`COROS_EMAIL` /
+`COROS_PASSWORD` env vars still work as an override). The password is
+hashed for the login call and never stored — only the access token is
+cached (`~/.cache/omarchy-coros/token.json`, mode 0600, 24h TTL).
+
+If logins fail on both regions, polls back off for an hour (instead of
+hammering the API and risking a lockout) and the widget tells you to
+re-run setup.
 
 ## Use
 
@@ -70,9 +76,10 @@ To drop the token cache this plugin wrote:
 
 ## Troubleshooting
 
-- **Widget empty** — check `COROS_EMAIL` / `COROS_PASSWORD` are visible to the
-  bar process, and that the region setting matches your account (`eu` vs `us`).
-  A wrong region fails login; the widget retries the other region once.
+- **Widget empty** — re-run `setup.sh`: it re-tests the login and tells you
+  whether the email/password or the region (`eu` vs `us`) is wrong. A wrong
+  region is retried once automatically; wrong credentials back off for an
+  hour to avoid hammering the API.
 - **Logged out of the phone app** — not expected from v1: the Training Hub web
   login does not touch the mobile session. (Only the mobile sleep API, not
   used here, forces the phone app out.)

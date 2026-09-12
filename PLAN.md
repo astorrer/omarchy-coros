@@ -19,11 +19,14 @@ sleep, training load) on the bar. Follows the omdeako pattern.
 ## Contract (branches must agree)
 
 - `coros.py snapshot` prints:
-  `{"hrv":42,"hrvBaseline":45,"rhr":48,"load":85,"sleepH":7.2,"activity":"Run 10k"}`
-  All keys optional; missing data = null, never an error exit for display.
+  `{"hrv":42,"hrvBaseline":45,"rhr":48,"load":85,"sleepH":7.2,"activity":"Run 10k","error":null}`
+  Metrics null when missing; `error` is null, "auth" (polls back off 1h), or
+  "network". Never an error exit for display.
 - Settings keys (`manifest.json` schema): `refreshIntervalSec`, `region`
   (`eu`/`us`), `hideWhenNoData`. QML reads the same keys.
-- Env: `COROS_EMAIL`, `COROS_PASSWORD` (never in git, never echoed).
+- Credentials: env `COROS_EMAIL`/`COROS_PASSWORD` wins;
+  `~/.config/omarchy-coros/credentials` (0600, written by `setup.sh`) is the
+  fallback. Never in git, never echoed, never logged.
 
 ## Branches (short-lived, merge to main)
 

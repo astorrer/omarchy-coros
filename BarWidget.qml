@@ -25,7 +25,7 @@ BarWidget {
   readonly property string barText: Model.formatSnapshot(snapshot)
   readonly property string tooltipText: barText !== ""
     ? "COROS — " + barText
-    : "COROS"
+    : (Model.authError(snapshot) ? "COROS — login failed, re-run setup.sh" : "COROS")
 
   visible: !hideWhenNoData || !Model.isEmpty(snapshot)
 

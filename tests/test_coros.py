@@ -17,7 +17,7 @@ _SPEC = importlib.util.spec_from_file_location("coros", _COROS_PATH)
 coros = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(coros)
 
-EXPECTED_KEYS = ["hrv", "hrvBaseline", "rhr", "load", "sleepH", "activity"]
+EXPECTED_KEYS = ["hrv", "hrvBaseline", "rhr", "load", "sleepH", "activity", "error"]
 NULLS = {key: None for key in EXPECTED_KEYS}
 
 
@@ -95,6 +95,7 @@ class CorosTest(unittest.TestCase):
             os.environ,
             {
                 "XDG_CACHE_HOME": self.tmp.name,
+                "XDG_CONFIG_HOME": self.tmp.name,
                 "COROS_EMAIL": "user@example.com",
                 "COROS_PASSWORD": "secret",
             },
@@ -131,7 +132,7 @@ class CorosTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(
             json.loads(out),
-            {"hrv": 42, "hrvBaseline": 45, "rhr": 48, "load": 85, "sleepH": 7.2, "activity": "Run 10k"},
+            {"hrv": 42, "hrvBaseline": 45, "rhr": 48, "load": 85, "sleepH": 7.2, "activity": "Run 10k", "error": None},
         )
         path, entry = self.token_cache()
         self.assertEqual(entry["access_token"], "tok")
@@ -230,6 +231,30 @@ class CorosTest(unittest.TestCase):
         self.assertTrue(any("account/login" in url for url in http.calls))
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
+    def test_credentials_file_fallback(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            conf = os.path.join(self.tmp.name, "omarchy-coros")
+            os.makedirs(conf, mode=0o700, exist_ok=True)
+            with open(os.path.join(conf, "credentials"), "w") as handle:
+                handle.write("COROS_EMAIL=user@example.com\nCOROS_PASSWORD=secret\nCOROS_REGION=eu\n")
+            self.fake(full_routes())
+            code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+
+    def test_double_login_failure_cools_down(self):
+        fail = [{"result": 1001, "message": "bad"}, {"result": 1002, "message": "bad"}]
+        http = self.fake([("account/login", fail)])
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
+        self.assertEqual(len([url for url in http.calls if "account/login" in url]), 2)
+        http2 = self.fake([])
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
+        self.assertEqual(http2.calls, [])
+
     def test_nulls_on_empty(self):
         self.fake(
             [
@@ -254,7 +279,9 @@ class CorosTest(unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, {"COROS_PASSWORD": ""}):
             code, out, err = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out), NULLS)
+        expected = dict(NULLS)
+        expected["error"] = "auth"
+        self.assertEqual(json.loads(out), expected)
         self.assertIn("COROS_", err)
 
     def test_watch_streams_ndjson(self):

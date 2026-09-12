@@ -55,6 +55,10 @@ function isEmpty(snapshot) {
     && str(snapshot.activity) === null
 }
 
+function authError(snapshot) {
+  return !!(snapshot && typeof snapshot === "object" && snapshot.error === "auth")
+}
+
 function formatDelta(d) {
   if (d === null || d === undefined || !isFinite(Number(d))) return ""
   var r = Math.round(Number(d))

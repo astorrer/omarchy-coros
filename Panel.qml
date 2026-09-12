@@ -20,6 +20,7 @@ Panel {
   readonly property string statusText: {
     if (!client) return ""
     if (client.actionStatus !== "") return client.actionStatus
+    if (Model.authError(snapshot)) return "COROS login failed — re-run setup.sh, then Refresh."
     if (Model.isEmpty(snapshot)) return "No COROS data yet — check login, then Refresh."
     return ""
   }
