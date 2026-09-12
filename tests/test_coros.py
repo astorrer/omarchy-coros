@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import sys
 import tempfile
 import time
 import unittest
@@ -114,10 +115,11 @@ class CorosTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         return http
 
-    def run_cli(self, argv):
+    def run_cli(self, argv, stdin_text=""):
         out = io.StringIO()
         err = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        stdin = io.StringIO(stdin_text)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), unittest.mock.patch.object(sys, "stdin", stdin):
             code = coros.main(argv)
         return code, out.getvalue(), err.getvalue()
 
@@ -296,6 +298,28 @@ class CorosTest(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         for raw in lines:
             self.assertEqual(json.loads(raw), line)
+
+    def test_login_stdin_writes_creds_and_snapshots(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            self.fake(full_routes())
+            payload = json.dumps({"email": "user@example.com", "password": "secret", "region": "eu"})
+            code, out, err = self.run_cli(["login"], stdin_text=payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+        self.assertIsNone(json.loads(out)["error"])
+        self.assertNotIn("secret", out)
+        self.assertNotIn("secret", err)
+        path = os.path.join(self.tmp.name, "omarchy-coros", "credentials")
+        with open(path) as handle:
+            text = handle.read()
+        self.assertIn(coros.CREDS_MARK, text)
+        self.assertIn("COROS_EMAIL=user@example.com", text)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_login_empty_body_is_auth_error(self):
+        code, out, _ = self.run_cli(["login"], stdin_text="{}")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
 
 
 if __name__ == "__main__":

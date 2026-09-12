@@ -13,15 +13,19 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
   property string view: "main"
+  property string draftEmail: ""
+  property string draftPassword: ""
+  property string draftRegion: "eu"
 
   readonly property var client: hostWidget
   readonly property var snapshot: client ? client.snapshot : null
+  readonly property bool showLogin: view === "login" || (view === "main" && Model.authError(snapshot))
 
   readonly property string statusText: {
     if (!client) return ""
     if (client.actionStatus !== "") return client.actionStatus
-    if (Model.authError(snapshot)) return "COROS login failed — re-run setup.sh, then Refresh."
-    if (Model.isEmpty(snapshot)) return "No COROS data yet — check login, then Refresh."
+    if (showLogin) return "Sign in to your COROS account."
+    if (Model.isEmpty(snapshot)) return "No COROS data yet — open Settings to sign in."
     return ""
   }
 
@@ -61,7 +65,7 @@ Panel {
   }
 
   function goBack() {
-    if (root.view === "settings") {
+    if (root.view === "settings" || root.view === "login") {
       root.view = "main"
     } else {
       root.close()
@@ -70,6 +74,19 @@ Panel {
 
   function openSettings() {
     root.view = "settings"
+  }
+
+  function openLogin() {
+    draftRegion = client && client.region === "us" ? "us" : "eu"
+    draftPassword = ""
+    root.view = "login"
+  }
+
+  function submitLogin() {
+    if (!client || client.loginBusy) return
+    client.saveLogin(draftEmail, draftPassword, draftRegion)
+    draftPassword = ""
+    root.view = "main"
   }
 
   function openProject() {
@@ -155,7 +172,7 @@ Panel {
 
         Text {
           width: parent.width
-          visible: root.view === "main" && statusText !== ""
+          visible: (root.view === "main" || root.showLogin) && statusText !== ""
           text: statusText
           color: root.barForeground
           opacity: 0.55
@@ -164,9 +181,132 @@ Panel {
           elide: Text.ElideMiddle
         }
 
+        // ---- Sign-in: email/password over stdin to coros.py login, never argv. ----
+        Column {
+          visible: root.showLogin
+          width: parent.width
+          spacing: Style.space(10)
+
+          Column {
+            width: parent.width
+            spacing: 2
+            Text {
+              text: "Email"
+              color: root.barForeground
+              opacity: 0.45
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+            TextInput {
+              width: parent.width
+              color: root.barForeground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.body
+              clip: true
+              text: root.draftEmail
+              onTextChanged: root.draftEmail = text
+              Rectangle {
+                width: parent.width
+                height: 1
+                color: root.barForeground
+                opacity: 0.25
+                anchors.bottom: parent.bottom
+              }
+            }
+          }
+
+          Column {
+            width: parent.width
+            spacing: 2
+            Text {
+              text: "Password"
+              color: root.barForeground
+              opacity: 0.45
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+            TextInput {
+              width: parent.width
+              color: root.barForeground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.body
+              clip: true
+              echoMode: TextInput.Password
+              text: root.draftPassword
+              onTextChanged: root.draftPassword = text
+              onAccepted: root.submitLogin()
+              Rectangle {
+                width: parent.width
+                height: 1
+                color: root.barForeground
+                opacity: 0.25
+                anchors.bottom: parent.bottom
+              }
+            }
+          }
+
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(8)
+            Text {
+              text: "Region"
+              color: root.barForeground
+              opacity: 0.55
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.body
+              Layout.fillWidth: true
+            }
+            Text {
+              text: "eu"
+              color: root.barForeground
+              opacity: root.draftRegion === "eu" ? 1.0 : 0.45
+              font.bold: root.draftRegion === "eu"
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.body
+              MouseArea {
+                anchors.fill: parent
+                anchors.margins: -Style.space(4)
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.draftRegion = "eu"
+              }
+            }
+            Text {
+              text: "us"
+              color: root.barForeground
+              opacity: root.draftRegion === "us" ? 1.0 : 0.45
+              font.bold: root.draftRegion === "us"
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.body
+              MouseArea {
+                anchors.fill: parent
+                anchors.margins: -Style.space(4)
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.draftRegion = "us"
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: root.client && root.client.loginBusy ? "Signing in…" : "Sign in"
+            color: root.barForeground
+            opacity: root.client && root.client.loginBusy ? 0.45 : 0.85
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+            font.bold: true
+            MouseArea {
+              anchors.fill: parent
+              anchors.margins: -Style.space(4)
+              cursorShape: Qt.PointingHandCursor
+              enabled: !(root.client && root.client.loginBusy)
+              onClicked: root.submitLogin()
+            }
+          }
+        }
+
         // ---- Main view: recovery metrics, footer with the gear. ----
         Column {
-          visible: root.view === "main"
+          visible: root.view === "main" && !root.showLogin
           width: parent.width
           spacing: Style.space(10)
 
@@ -346,6 +486,21 @@ Panel {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.goBack()
               }
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: "Change account"
+            color: root.barForeground
+            opacity: 0.85
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+            MouseArea {
+              anchors.fill: parent
+              anchors.margins: -Style.space(4)
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.openLogin()
             }
           }
 

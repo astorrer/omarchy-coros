@@ -34,7 +34,8 @@ function parseSnapshot(raw) {
     rhr: num(parsed.rhr),
     load: num(parsed.load),
     sleepH: num(parsed.sleepH),
-    activity: str(parsed.activity)
+    activity: str(parsed.activity),
+    error: str(parsed.error)
   }
 }
 

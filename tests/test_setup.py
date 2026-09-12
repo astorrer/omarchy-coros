@@ -42,7 +42,7 @@ class SetupUninstallTest(unittest.TestCase):
         creds = home / ".config" / "omarchy-coros" / "credentials"
         creds.parent.mkdir(parents=True, exist_ok=True)
         creds.write_text(
-            "# Written by omarchy-coros setup.sh\nCOROS_EMAIL=a@b.c\n",
+            "# Written by omarchy-coros\nCOROS_EMAIL=a@b.c\n",
             encoding="utf-8",
         )
         return link, cache, creds
@@ -92,7 +92,7 @@ class SetupInstallTest(unittest.TestCase):
             self.assertEqual(link.resolve(), ROOT.resolve())
             creds = home / ".config" / "omarchy-coros" / "credentials"
             text = creds.read_text(encoding="utf-8")
-            self.assertIn("# Written by omarchy-coros setup.sh", text)
+            self.assertIn("# Written by omarchy-coros", text)
             self.assertIn("COROS_EMAIL=user@example.com", text)
             self.assertIn("COROS_REGION=us", text)
             self.assertNotIn("secret", result.stdout + result.stderr)

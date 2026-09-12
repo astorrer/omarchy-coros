@@ -43,9 +43,11 @@ mocked HTTP only — no network, ever.
 
 ## Scope notes
 
-- `setup.sh` is user-facing: it prompts for credentials, writes
-  `~/.config/omarchy-coros/credentials` (0600), and tests the login. It must
-  never print the password. `uninstall` must only remove files this plugin
+- Sign-in lives in the panel, not `setup.sh`. `coros.py login` reads
+  `{email,password,region}` JSON from stdin (password never on argv), writes
+  `~/.config/omarchy-coros/credentials` (0600), and prints a snapshot.
+  `setup.sh` is install plumbing (python check, optional symlink); it must
+  never print a password. `uninstall` must only remove files this plugin
   wrote (dev symlink, credentials file, token cache).
 - Settings keys in `manifest.json` `barWidget.schema` must stay in sync with
   the QML that reads them (`refreshIntervalSec`, `region`,

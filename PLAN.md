@@ -25,8 +25,9 @@ sleep, training load) on the bar. Follows the omdeako pattern.
 - Settings keys (`manifest.json` schema): `refreshIntervalSec`, `region`
   (`eu`/`us`), `hideWhenNoData`. QML reads the same keys.
 - Credentials: env `COROS_EMAIL`/`COROS_PASSWORD` wins;
-  `~/.config/omarchy-coros/credentials` (0600, written by `setup.sh`) is the
-  fallback. Never in git, never echoed, never logged.
+  `~/.config/omarchy-coros/credentials` (0600, written by `coros.py login` from
+  the panel, stdin JSON — never argv) is the fallback. Never in git, never
+  echoed, never in widget settings.
 
 ## Branches (short-lived, merge to main)
 

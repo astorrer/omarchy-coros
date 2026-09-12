@@ -57,6 +57,9 @@ def cache_file():
     return os.path.join(base, "omarchy-coros", "token.json")
 
 
+CREDS_MARK = "# Written by omarchy-coros"
+
+
 def config_dir():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     return os.path.join(base, "omarchy-coros")
@@ -79,11 +82,32 @@ def read_config_file():
 
 
 def credentials():
-    """Env wins; the setup.sh credentials file is the fallback."""
+    """Env wins; the credentials file (written by the panel or setup.sh) is the fallback."""
     config = read_config_file()
     email = os.environ.get("COROS_EMAIL") or config.get("COROS_EMAIL")
     password = os.environ.get("COROS_PASSWORD") or config.get("COROS_PASSWORD")
     return email or None, password or None
+
+
+def write_credentials(email, password, region):
+    parent = config_dir()
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    os.chmod(parent, 0o700)
+    path = os.path.join(parent, "credentials")
+    body = (
+        CREDS_MARK
+        + "\nCOROS_EMAIL="
+        + email
+        + "\nCOROS_PASSWORD="
+        + password
+        + "\nCOROS_REGION="
+        + region
+        + "\n"
+    ).encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(body)
 
 
 def cooldown_file():
@@ -284,12 +308,12 @@ def ymd(ts):
 def get_snapshot(region):
     email, password = credentials()
     if not email or not password:
-        eprint("coros.py: no credentials — run setup.sh, or set COROS_EMAIL and COROS_PASSWORD")
+        eprint("coros.py: no credentials — sign in from the widget, or set COROS_EMAIL and COROS_PASSWORD")
         snap = dict(NULL_SNAPSHOT)
         snap["error"] = "auth"
         return snap
     if cooldown_active():
-        eprint("coros.py: login cooling down after failures — re-run setup.sh to retry now")
+        eprint("coros.py: login cooling down after failures — sign in from the widget to retry now")
         snap = dict(NULL_SNAPSHOT)
         snap["error"] = "auth"
         return snap
@@ -339,6 +363,40 @@ def resolve_region(flag):
     return conf if conf in BASES else "eu"
 
 
+def cmd_login():
+    """Read {email,password,region} JSON from stdin, store 0600 creds, print a snapshot.
+
+    Password never appears on argv. Always one JSON object on stdout, exit 0.
+    """
+    try:
+        body = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    email = str(body.get("email") or "").strip()
+    password = str(body.get("password") or "")
+    region = str(body.get("region") or "eu").strip().lower()
+    if region not in BASES:
+        region = "eu"
+    if not email or not password:
+        snap = dict(NULL_SNAPSHOT)
+        snap["error"] = "auth"
+        print(json.dumps(snap))
+        return 0
+    try:
+        write_credentials(email, password, region)
+        clear_cooldown()
+    except OSError as exc:
+        eprint("coros.py: could not write credentials: " + str(exc))
+        snap = dict(NULL_SNAPSHOT)
+        snap["error"] = "auth"
+        print(json.dumps(snap))
+        return 0
+    print(json.dumps(get_snapshot(region)))
+    return 0
+
+
 def cmd_snapshot(region_flag):
     print(json.dumps(get_snapshot(resolve_region(region_flag))))
     return 0
@@ -366,15 +424,21 @@ def parse_interval(raw):
 
 
 def usage():
-    return "usage: coros.py snapshot [--region eu|us]\n       coros.py watch [--region eu|us] [--interval N]"
+    return (
+        "usage: coros.py snapshot [--region eu|us]\n"
+        "       coros.py watch [--region eu|us] [--interval N]\n"
+        "       coros.py login   # JSON {email,password,region} on stdin"
+    )
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("snapshot", "watch"):
+    if not argv or argv[0] not in ("snapshot", "watch", "login"):
         eprint(usage())
         return 2
     command = argv[0]
+    if command == "login":
+        return cmd_login()
     region_flag = None
     interval = DEFAULT_INTERVAL_S
     rest = argv[1:]

@@ -15,24 +15,20 @@ load, and the last activity — per-user self-login, nothing hosted.
 omarchy plugin add https://github.com/astorrer/omarchy-coros.git --enable
 ```
 
-Then run setup from the plugin folder. It symlinks the dev install, asks
-for your COROS email/password/region, stores them in
-`~/.config/omarchy-coros/credentials` (mode 0600, never in git), and tests
-the login once before finishing:
+Then run setup from the plugin folder (python check + optional dev symlink).
+Sign in from the COROS panel on the bar — email, password, and region.
+Credentials land in `~/.config/omarchy-coros/credentials` (mode 0600, never
+in git, never in widget settings, never on argv). The password is hashed
+for the login call; only the access token is cached
+(`~/.cache/omarchy-coros/token.json`, mode 0600, 24h TTL).
 
 ```sh
 ~/.config/omarchy/plugins/io.github.astorrer.omarchy-coros/setup.sh
 ```
 
-No environment variables needed: the helper reads the credentials file
-itself, so the bar process needs no extra plumbing (`COROS_EMAIL` /
-`COROS_PASSWORD` env vars still work as an override). The password is
-hashed for the login call and never stored — only the access token is
-cached (`~/.cache/omarchy-coros/token.json`, mode 0600, 24h TTL).
-
-If logins fail on both regions, polls back off for an hour (instead of
-hammering the API and risking a lockout) and the widget tells you to
-re-run setup.
+`COROS_EMAIL` / `COROS_PASSWORD` env vars still work as an override for
+tests. If logins fail on both regions, polls back off for an hour and the
+panel asks you to sign in again.
 
 ## Use
 
@@ -76,10 +72,9 @@ To drop the token cache this plugin wrote:
 
 ## Troubleshooting
 
-- **Widget empty** — re-run `setup.sh`: it re-tests the login and tells you
-  whether the email/password or the region (`eu` vs `us`) is wrong. A wrong
+- **Widget empty / sign-in failed** — open the panel and sign in. A wrong
   region is retried once automatically; wrong credentials back off for an
-  hour to avoid hammering the API.
+  hour. Settings → Change account to switch users.
 - **Logged out of the phone app** — not expected from v1: the Training Hub web
   login does not touch the mobile session. (Only the mobile sleep API, not
   used here, forces the phone app out.)

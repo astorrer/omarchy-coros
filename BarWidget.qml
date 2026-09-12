@@ -25,9 +25,11 @@ BarWidget {
   readonly property string barText: Model.formatSnapshot(snapshot)
   readonly property string tooltipText: barText !== ""
     ? "COROS — " + barText
-    : (Model.authError(snapshot) ? "COROS — login failed, re-run setup.sh" : "COROS")
+    : (Model.authError(snapshot) ? "COROS — sign in from the panel" : "COROS")
 
-  visible: !hideWhenNoData || !Model.isEmpty(snapshot)
+  property bool loginBusy: false
+
+  visible: Model.authError(snapshot) || !hideWhenNoData || !Model.isEmpty(snapshot)
 
   function intSetting(name, fallback, min, max) {
     var n = parseInt(String(setting(name, fallback)), 10)
@@ -58,6 +60,16 @@ BarWidget {
     if (line === "") return
     var parsed = Model.parseSnapshot(line)
     if (parsed) snapshot = parsed
+  }
+
+  function saveLogin(email, password, region) {
+    var r = validRegion(region)
+    loginBusy = true
+    notify("Signing in…")
+    loginProcess.payload = JSON.stringify({ email: email, password: password, region: r })
+    loginProcess.running = false
+    loginProcess.running = true
+    writeSetting("region", r)
   }
 
   function writeSetting(key, value) {
@@ -146,6 +158,26 @@ BarWidget {
     command: root.snapshotArgs()
     stdout: SplitParser {
       onRead: root.applySnapshotLine(read)
+    }
+  }
+
+  Process {
+    id: loginProcess
+    running: false
+    stdinEnabled: true
+    property string payload: ""
+    command: ["python3", root.helperPath, "login"]
+    stdout: SplitParser {
+      onRead: root.applySnapshotLine(read)
+    }
+    onStarted: {
+      write(payload)
+      payload = ""
+    }
+    onExited: {
+      root.loginBusy = false
+      if (Model.authError(root.snapshot)) root.notify("Sign-in failed")
+      else root.notify("Signed in")
     }
   }
 
