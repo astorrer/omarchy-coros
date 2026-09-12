@@ -48,13 +48,15 @@ def cache_file():
     return os.path.join(base, "omarchy-coros", "token.json")
 
 
-def load_token(region):
+def load_token():
     try:
-        with open(cache_file()) as handle:
+        with open(cache_file(), "rb") as handle:
+            if os.fstat(handle.fileno()).st_mode & 0o077:
+                return None  # refuse group/other-readable cache
             entry = json.load(handle)
-        if entry.get("region") != region:
-            return None
         if not entry.get("access_token") or entry.get("user_id") is None:
+            return None
+        if entry.get("region") not in BASES:
             return None
         age_ms = time.time() * 1000 - float(entry.get("timestamp_ms") or 0)
         if age_ms < 0 or age_ms > TOKEN_TTL_MS:
@@ -70,17 +72,23 @@ def save_token(access_token, user_id, region):
         parent = os.path.dirname(path)
         os.makedirs(parent, mode=0o700, exist_ok=True)
         os.chmod(parent, 0o700)
-        with open(path, "w") as handle:
-            json.dump(
-                {
-                    "access_token": access_token,
-                    "user_id": user_id,
-                    "region": region,
-                    "timestamp_ms": int(time.time() * 1000),
-                },
-                handle,
-            )
-        os.chmod(path, 0o600)
+        payload = json.dumps(
+            {
+                "access_token": access_token,
+                "user_id": user_id,
+                "region": region,
+                "timestamp_ms": int(time.time() * 1000),
+            }
+        ).encode("utf-8")
+        # 0o600 at creation: a new file is never world-readable, not even
+        # briefly. umask can only narrow these bits, so creation is safe; the
+        # fchmod covers a pre-existing file with looser mode (O_TRUNC keeps
+        # its mode). Truncation happens before the chmod, but an empty file
+        # leaks nothing and the token is only written after.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
     except OSError as exc:
         eprint("coros.py: could not cache token: " + str(exc))
 
@@ -110,7 +118,7 @@ def do_login(email, password, region):
         "POST",
         BASES[region] + "/account/login",
         {"Content-Type": "application/json"},
-        {"account": email, "accountType": 2, "pwd": hashlib.md5(password.encode("utf-8")).hexdigest()},
+        {"account": email, "accountType": 2, "pwd": hashlib.md5(password.encode("utf-8"), usedforsecurity=False).hexdigest()},
     )
     code = result_code(resp)
     if code is not None and code != 0:
@@ -135,9 +143,9 @@ def login(email, password, region):
 
 
 def ensure_auth(email, password, region):
-    cached = load_token(region)
+    cached = load_token()
     if cached is not None:
-        return cached["access_token"], cached["user_id"], region
+        return cached["access_token"], cached["user_id"], cached["region"]
     return login(email, password, region)
 
 

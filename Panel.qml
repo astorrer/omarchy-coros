@@ -262,6 +262,8 @@ Panel {
               }
               Text {
                 text: root.snapshot ? root.metricText(root.snapshot.activity) : "—"
+                // User-authored activity names: never interpret markup.
+                textFormat: Text.PlainText
                 color: root.barForeground
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
                 font.pixelSize: Style.font.body

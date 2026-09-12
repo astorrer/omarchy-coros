@@ -7,6 +7,7 @@ import io
 import json
 import os
 import tempfile
+import time
 import unittest
 import unittest.mock
 import urllib.request
@@ -188,6 +189,46 @@ class CorosTest(unittest.TestCase):
         self.assertNotIn("teameuapi", day_calls[0])
         _, entry = self.token_cache()
         self.assertEqual(entry["region"], "us")
+
+    def test_cached_resolved_region_reused_on_later_polls(self):
+        http = self.fake(
+            [
+                ("teameuapi.coros.com/account/login", [{"result": 1001, "message": "login failed"}]),
+                ("teamapi.coros.com/account/login", [login_payload("us-tok")]),
+                ("dayDetail", [day_payload(), day_payload()]),
+                ("activity/query", [activity_payload(), activity_payload()]),
+            ]
+        )
+        for _ in range(2):
+            code, out, _ = self.run_cli(["snapshot", "--region", "eu"])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out)["hrv"], 42)
+        logins = [url for url in http.calls if "account/login" in url]
+        self.assertEqual(len(logins), 2)
+        self.assertEqual(len([url for url in logins if "teameuapi" in url]), 1)
+        self.assertNotIn("teameuapi", [url for url in http.calls if "dayDetail" in url])
+
+    def test_world_readable_cache_refused(self):
+        cache_dir = os.path.join(self.tmp.name, "omarchy-coros")
+        os.makedirs(cache_dir, mode=0o700, exist_ok=True)
+        path = os.path.join(cache_dir, "token.json")
+        with open(path, "w") as handle:
+            json.dump(
+                {
+                    "access_token": "stale",
+                    "user_id": 7,
+                    "region": "eu",
+                    "timestamp_ms": int(time.time() * 1000),
+                },
+                handle,
+            )
+        os.chmod(path, 0o644)
+        http = self.fake(full_routes())
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+        self.assertTrue(any("account/login" in url for url in http.calls))
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
     def test_nulls_on_empty(self):
         self.fake(
