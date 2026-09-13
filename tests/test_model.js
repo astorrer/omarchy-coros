@@ -228,6 +228,97 @@ check(Model.loginPayload("a@b.c", "p", "eu"), '{"email":"a@b.c","password":"p","
 check(Model.snapshotArgs("/opt/omarchy/coros.py", "eu"), ["python3", "/opt/omarchy/coros.py", "snapshot", "--region", "eu"], "snapshotArgs")
 check(Model.snapshotArgs("coros.py", "us"), ["python3", "coros.py", "snapshot", "--region", "us"], "snapshotArgs us region")
 
+check(Model.parseSnapshot(""), null, "parseSnapshot empty raw")
+check(Model.parseSnapshot('{"error":""}').error, null, "parseSnapshot blank error is null")
+check(Model.parseSnapshot('{"hrv":"abc"}').hrv, null, "num non-numeric is null")
+check(Model.parseSnapshot('{"activity":"  "}').activity, null, "str whitespace is null")
+check(Model.formatDay(""), "", "formatDay empty is blank")
+check(Model.formatDay("2026-13-01"), "", "formatDay invalid month blank")
+check(Model.hrvDelta(null, 26), null, "hrvDelta null hrv")
+check(Model.hrvDelta(24, null), null, "hrvDelta null baseline")
+check(Model.isEmpty(null), true, "isEmpty null snapshot")
+check(Model.isEmpty(42), true, "isEmpty non-object snapshot")
+check(Model.loadStateLabel(null), "", "loadStateLabel unknown is empty")
+check(Model.fatigueStateLabel(null), "", "fatigueStateLabel unknown is empty")
+check(Model.fatigueIcon(99), Model.ICON.battery50, "fatigueIcon unknown falls back")
+check(Model.activityIcon(null), Model.ICON.activity, "activityIcon empty falls back")
+check(Model.activityIcon("Paddle Boarding"), Model.ICON.activity, "activityIcon unknown falls back")
+check(Model.formatTick(null), "", "formatTick null is blank")
+check(Model.hrvRange(null), null, "hrvRange null snapshot")
+check(Model.hrvRange({ hrv: 24 }), null, "hrvRange missing bands")
+check(Model.hrvTone(null), "neutral", "hrvTone missing range is neutral")
+check(Model.fatigueTone(null), "neutral", "fatigueTone empty is neutral")
+check(Model.fatigueTone(3), "neutral", "fatigueTone mid is neutral")
+check(Model.loadTone(5), "bad", "loadTone overreach is bad")
+check(Model.loadTone(3), "good", "loadTone maintaining is good")
+check(Model.weekTone(null, 210, 315), "neutral", "weekTone null pos is neutral")
+check(Model.weekTone(250, 210, 315), "good", "weekTone in range is good")
+check(Model.heroPhrases({ error: "auth" }), [], "heroPhrases idle is empty")
+check(Model.validBarMetric(undefined), "hrv", "validBarMetric undefined falls back")
+check(Model.validBarMetric(null), "hrv", "validBarMetric null falls back")
+check(Model.formatDelta(null), "", "formatDelta null is blank")
+check(Model.formatDelta(undefined), "", "formatDelta undefined is blank")
+check(Model.regionLabel(null), "EU", "regionLabel empty is EU")
+check(Model.clampRefreshMinutes("abc"), 30, "clamp non-number defaults")
+check(Model.refreshIntervalMinutes("", "20"), 15, "refresh sec sub-minute floors to 15")
+check(Model.formatSnapshot({ hrv: null, rhr: null, load: 0, error: null }), "Load 0", "formatSnapshot load")
+check(Model.formatSnapshot({ hrv: null, rhr: null, load: null, error: null }), "", "formatSnapshot no data")
+check(Model.formatBar(snap, "hrv"), "HRV 24", "formatBar hrv")
+check(Model.formatBar(snap, "load"), "Load 0", "formatBar load")
+check(Model.formatBar({ hrv: null, rhr: 61, load: 0, error: null }, "hrv"), "RHR 61", "formatBar falls through to snapshot")
+check(Model.formatBar({ hrv: null, rhr: null, load: null, fatigueState: null, fatigue: 25, error: null }, "fatigue"), "25", "formatBar fatigue numeric fallback")
+check(Model.formatBar({ hrv: 24, error: null }, "nope"), "HRV 24", "formatBar unknown metric normalizes")
+check(Model.formatBar({ hrv: Symbol("x") }, "hrv"), "", "formatBar protects against throw")
+check(Model.formatSnapshot({ hrv: Symbol("x") }), "", "formatSnapshot protects against throw")
+check(Model.formatTooltip(null), "COROS", "tooltip null snapshot")
+check(Model.formatTooltip({ day: null, hrv: null, rhr: null, load: null, load7d: null, fatigueState: null, activity: null, error: null }), "COROS", "tooltip no data")
+check(Model.formatTooltip({ activity: "Morning Run", error: null, hrv: null, rhr: null, load: null, load7d: null, fatigueState: null, day: null }), "COROS — Morning Run", "tooltip activity without day")
+check(Model.formatTooltip({ hrv: Symbol("x") }), "COROS", "tooltip protects against throw")
+
+check(Model.metricGroups(null), { recovery: [], load: [], bars: [], activity: [] }, "metricGroups unsigned is empty")
+check(Model.metricGroups({ error: "auth" }), { recovery: [], load: [], bars: [], activity: [] }, "metricGroups auth is empty")
+let noRatio = {
+  error: null, hrvBandLow: null, hrvBandHigh: null, hrv: null, hrvBaseline: null, testRhr: null,
+  rhr: 61, balance: 0, fatigue: 25, fatigueState: null, load: 3, load7d: 24, load28d: 238,
+  loadRatio: null, loadState: null, loadWeek: null, ati: null, cti: null, activity: null, activityDay: null, day: null
+}
+let gNoRatio = Model.metricGroups(noRatio)
+check(gNoRatio.recovery.length, 3, "groups recovery rows with empty fatigue label")
+check(gNoRatio.recovery[1].value, "25", "groups fatigue falls back to numeric")
+check(gNoRatio.load.length, 2, "groups ratio-null drops ratio row")
+check(gNoRatio.bars.length, 0, "groups ratio-null no bars")
+let mutedRatio = {
+  error: null, rhr: null, fatigueState: null, fatigue: null, balance: null, load: 3,
+  load7d: null, load28d: null, loadRatio: 0.5, loadState: null, loadWeek: null, ati: null,
+  cti: null, activity: null, activityDay: null, day: null
+}
+let gMuted = Model.metricGroups(mutedRatio)
+check(gMuted.load.length, 1, "groups ratio-null load only today")
+check(gMuted.bars.length, 1, "groups ratio row with no label")
+check(gMuted.bars[0].value, "0.50", "groups ratio value without label")
+let only7 = {
+  error: null, rhr: null, fatigueState: null, fatigue: null, balance: null, load: 3,
+  load7d: 24, load28d: null, loadRatio: 0.8, loadState: 1, loadWeek: null, loadWeekMin: null,
+  loadWeekMax: null, ati: null, cti: null, activity: null, activityDay: null, day: null
+}
+let gOnly7 = Model.metricGroups(only7)
+check(gOnly7.load[1].id, "load7d", "groups 7-day only row")
+let only28 = {
+  error: null, rhr: null, fatigueState: null, fatigue: null, balance: null, load: 3,
+  load7d: null, load28d: 238, loadRatio: 0.8, loadState: 1, loadWeek: null, loadWeekMin: null,
+  loadWeekMax: null, ati: null, cti: null, activity: null, activityDay: null, day: null
+}
+let gOnly28 = Model.metricGroups(only28)
+check(gOnly28.load[1].id, "load28d", "groups 28-day only row")
+let noDay = {
+  error: null, rhr: null, fatigueState: 1, fatigue: null, balance: null, load: null,
+  load7d: null, load28d: null, loadRatio: null, loadState: null, loadWeek: null, ati: null,
+  cti: null, activity: "Morning Run", activityDay: undefined, day: null
+}
+let gNoDay = Model.metricGroups(noDay)
+check(gNoDay.activity.length, 1, "groups activity row without day")
+check(gNoDay.activity[0].label, "Last activity", "groups activity without day")
+
 if (failures > 0) {
   console.error(`${failures} model checks failed`)
   process.exit(1)
