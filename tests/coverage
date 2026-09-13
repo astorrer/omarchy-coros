@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Coverage report across the instrumentable application logic.
+#
+#   ./tests/coverage          report only (never fails)
+#   ./tests/coverage check     exit non-zero if a threshold is not met
+#
+# Thresholds can be overridden: COV_COROS_LINES=99 ./tests/coverage check
+#
+# coros.py is measured with coverage.py (branch mode). Model.js is measured
+# with node's v8 byte-audit coverage (the module is built via new Function, so
+# it shows up in the report under the empty URL).
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT" || exit 1
+
+COVERAGE=${COVERAGE:-python3 -m coverage}
+: "${COV_COROS_LINES:=98}"
+: "${COV_MODEL_BYTES:=98}"
+
+fail=0
+
+echo "==> coros.py coverage"
+"$COVERAGE" erase
+"$COVERAGE" run --branch --include=coros.py tests/test_coros.py >/dev/null 2>&1
+COROS_LINES=$("$COVERAGE" report --include=coros.py | awk '/coros.py/{gsub("%","",$6); print $6}')
+echo "coros.py line coverage: ${COROS_LINES}%"
+"$COVERAGE" report --include=coros.py -m
+
+echo
+echo "==> Model.js coverage"
+JSCN=$(mktemp -d)
+NODE_V8_COVERAGE="$JSCN" node tests/test_model.js >/dev/null 2>&1
+MODEL_BYTES=$(JSCN="$JSCN" node - <<'EOF'
+const fs = require('fs');
+const path = require('path');
+const dir = process.env.JSCN;
+const file = fs.readdirSync(dir).filter((f) => f.endsWith('.json'))[0];
+const data = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+let total = 0;
+let hits = 0;
+for (const f of data.result) {
+  if (f.url !== '') continue;
+  for (const fn of f.functions) {
+    for (const r of fn.ranges) {
+      total += r.endOffset - r.startOffset;
+      if (r.count > 0) hits += r.endOffset - r.startOffset;
+    }
+  }
+}
+process.stdout.write(String(Math.round((100 * hits) / total)));
+EOF
+)
+echo "Model.js byte coverage: ${MODEL_BYTES}%"
+rm -rf "$JSCN"
+
+if [[ ${1:-} == check ]]; then
+  echo
+  if (( COROS_LINES < COV_COROS_LINES )); then
+    echo "FAIL coros.py at ${COROS_LINES}% (need >= ${COV_COROS_LINES}%)"
+    fail=1
+  else
+    echo "ok coros.py >= ${COV_COROS_LINES}%"
+  fi
+  if (( MODEL_BYTES < COV_MODEL_BYTES )); then
+    echo "FAIL Model.js at ${MODEL_BYTES}% (need >= ${COV_MODEL_BYTES}%)"
+    fail=1
+  else
+    echo "ok Model.js >= ${COV_MODEL_BYTES}%"
+  fi
+  exit $fail
+fi
