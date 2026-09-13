@@ -47,3 +47,14 @@
   fatigue dots breathe (faster when strained), and range fills/thumbs ease
   like the battery bar. Colors stay on accent / urgent / foreground.
   Long last-activity names marquee instead of eliding.
+- Quality pass (wave 1): malformed Training Hub bodies are `network`, not
+  an hour of auth cooldown. HTTPS redirects stay on teamapi/teameuapi.
+  Credentials are documented as plaintext 0600 (needed for token refresh),
+  written only after a good login, and ignored if world-readable. The
+  token cache is an atomic replace. The panel uses Omarchy's single
+  cursor (refresh/settings/settings form); login fields block the key
+  catcher so typing works. Network failures show in the tooltip and
+  status instead of "waiting on metrics".
+- Poll/login live in `Service.qml` (bar keeps polling while the popup is
+  closed). Settings has Sign out; `coros.py logout` deletes credentials,
+  token cache, and cooldown. Uninstall honors XDG config/cache dirs.

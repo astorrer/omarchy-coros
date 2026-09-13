@@ -2,6 +2,7 @@
 """Mocked-HTTP tests for coros.py. No real network, ever."""
 
 import contextlib
+import email.message
 import importlib.util
 import io
 import json
@@ -11,6 +12,7 @@ import tempfile
 import time
 import unittest
 import unittest.mock
+import urllib.error
 import urllib.request
 
 _COROS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "coros.py")
@@ -24,10 +26,17 @@ NULLS = dict(coros.NULL_SNAPSHOT)
 
 class FakeResponse:
     def __init__(self, payload):
-        self._body = json.dumps(payload).encode("utf-8")
+        if isinstance(payload, bytes):
+            self._body = payload
+        elif isinstance(payload, str):
+            self._body = payload.encode("utf-8")
+        else:
+            self._body = json.dumps(payload).encode("utf-8")
 
-    def read(self):
-        return self._body
+    def read(self, n=-1):
+        if n is None or n < 0:
+            return self._body
+        return self._body[:n]
 
     def __enter__(self):
         return self
@@ -165,10 +174,13 @@ class CorosTest(unittest.TestCase):
         deny = unittest.mock.patch.object(urllib.request, "urlopen", deny_http)
         deny.start()
         self.addCleanup(deny.stop)
+        deny_open = unittest.mock.patch.object(coros, "http_open", deny_http)
+        deny_open.start()
+        self.addCleanup(deny_open.stop)
 
     def fake(self, routes):
         http = FakeHttp(routes)
-        patcher = unittest.mock.patch.object(urllib.request, "urlopen", http)
+        patcher = unittest.mock.patch.object(coros, "http_open", http)
         patcher.start()
         self.addCleanup(patcher.stop)
         return http
@@ -179,7 +191,13 @@ class CorosTest(unittest.TestCase):
         stdin = io.StringIO(stdin_text)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), unittest.mock.patch.object(sys, "stdin", stdin):
             code = coros.main(argv)
-        return code, out.getvalue(), err.getvalue()
+        out_text, err_text = out.getvalue(), err.getvalue()
+        self.assertNotIn("secret", out_text)
+        self.assertNotIn("secret", err_text)
+        return code, out_text, err_text
+
+    def creds_path(self):
+        return os.path.join(self.tmp.name, "omarchy-coros", "credentials")
 
     def token_cache(self):
         path = os.path.join(self.tmp.name, "omarchy-coros", "token.json")
@@ -292,8 +310,10 @@ class CorosTest(unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
             conf = os.path.join(self.tmp.name, "omarchy-coros")
             os.makedirs(conf, mode=0o700, exist_ok=True)
-            with open(os.path.join(conf, "credentials"), "w") as handle:
+            path = os.path.join(conf, "credentials")
+            with open(path, "w") as handle:
                 handle.write("COROS_EMAIL=user@example.com\nCOROS_PASSWORD=secret\nCOROS_REGION=eu\n")
+            os.chmod(path, 0o600)
             self.fake(full_routes())
             code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -549,6 +569,198 @@ class CorosTest(unittest.TestCase):
         self.assertIn("teameuapi.coros.com", [url for url in http.calls if "dayDetail" in url][0])
         _, entry = self.token_cache()
         self.assertEqual(entry["region"], "eu")
+
+    def test_html_daydetail_is_network_without_cooldown(self):
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", ["<html>"]),
+            ]
+        )
+        code, out, err = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "network")
+        self.assertFalse(os.path.exists(coros.cooldown_file()))
+        self.assertNotIn("secret", out)
+        self.assertNotIn("secret", err)
+
+    def test_urlerror_is_network(self):
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", [urllib.error.URLError("timed out")]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "network")
+        self.assertFalse(os.path.exists(coros.cooldown_file()))
+
+    def test_world_readable_creds_ignored(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            conf = os.path.join(self.tmp.name, "omarchy-coros")
+            os.makedirs(conf, mode=0o700, exist_ok=True)
+            path = os.path.join(conf, "credentials")
+            with open(path, "w") as handle:
+                handle.write("COROS_EMAIL=user@example.com\nCOROS_PASSWORD=secret\nCOROS_REGION=eu\n")
+            os.chmod(path, 0o644)
+            http = self.fake([])
+            code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
+        self.assertEqual(http.calls, [])
+
+    def test_login_does_not_write_creds_if_both_regions_fail(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            self.fake(
+                [
+                    ("account/login", [{"result": 1001, "message": "bad"}, {"result": 1002, "message": "bad"}]),
+                ]
+            )
+            payload = json.dumps({"email": "user@example.com", "password": "secret", "region": "eu"})
+            code, out, err = self.run_cli(["login"], stdin_text=payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
+        self.assertFalse(os.path.exists(self.creds_path()))
+        self.assertNotIn("secret", out)
+        self.assertNotIn("secret", err)
+
+    def test_login_failure_does_not_overwrite_good_creds(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            conf = os.path.join(self.tmp.name, "omarchy-coros")
+            os.makedirs(conf, mode=0o700, exist_ok=True)
+            path = self.creds_path()
+            before = "# Written by omarchy-coros\nCOROS_EMAIL=user@example.com\nCOROS_PASSWORD=secret\nCOROS_REGION=eu\n"
+            with open(path, "w") as handle:
+                handle.write(before)
+            os.chmod(path, 0o600)
+            self.fake(
+                [
+                    ("account/login", [{"result": 1001, "message": "bad"}, {"result": 1002, "message": "bad"}]),
+                ]
+            )
+            payload = json.dumps({"email": "user@example.com", "password": "secret", "region": "us"})
+            code, out, _ = self.run_cli(["login"], stdin_text=payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
+        with open(path) as handle:
+            self.assertEqual(handle.read(), before)
+
+    def test_redirect_off_host_does_not_follow_or_send_token(self):
+        class Rec(urllib.request.BaseHandler):
+            handler_order = 100
+
+            def __init__(self):
+                self.urls = []
+
+            def default_open(self, req):
+                self.urls.append(req.full_url)
+                headers = email.message.Message()
+                headers["Location"] = "https://evil.example/steal"
+                fp = io.BytesIO(b"")
+                fp.url = req.full_url
+                fp.code = 302
+                fp.msg = "Found"
+                fp.headers = headers
+                fp.info = lambda: headers
+                fp.geturl = lambda: req.full_url
+                fp.getcode = lambda: 302
+                return fp
+
+        rec = Rec()
+        opener = urllib.request.build_opener(coros.NoRedirectHandler(), rec)
+        req = urllib.request.Request(
+            "https://teameuapi.coros.com/analyse/dayDetail/query",
+            headers={"accessToken": "tok-secret"},
+            method="GET",
+        )
+        with self.assertRaises(coros.NetworkError):
+            opener.open(req, timeout=1)
+        self.assertEqual(rec.urls, ["https://teameuapi.coros.com/analyse/dayDetail/query"])
+        self.assertTrue(any(isinstance(handler, coros.NoRedirectHandler) for handler in coros._OPENER.handlers))
+
+    def test_nonzero_daydetail_after_1019_is_network(self):
+        self.fake(
+            [
+                ("account/login", [login_payload("tok-A"), login_payload("tok-B")]),
+                ("dayDetail", [{"result": 1019, "message": "token expired"}, {"result": 1001, "message": "nope"}]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "network")
+        self.assertFalse(os.path.exists(coros.cooldown_file()))
+
+    def test_logout_removes_creds_token_and_cooldown(self):
+        with tempfile.TemporaryDirectory() as cfg, tempfile.TemporaryDirectory() as cache:
+            with unittest.mock.patch.dict(
+                os.environ,
+                {
+                    "XDG_CONFIG_HOME": cfg,
+                    "XDG_CACHE_HOME": cache,
+                    "COROS_EMAIL": "",
+                    "COROS_PASSWORD": "",
+                },
+            ):
+                cred_dir = os.path.join(cfg, "omarchy-coros")
+                cache_dir = os.path.join(cache, "omarchy-coros")
+                os.makedirs(cred_dir, mode=0o700)
+                os.makedirs(cache_dir, mode=0o700)
+                creds = os.path.join(cred_dir, "credentials")
+                token = os.path.join(cache_dir, "token.json")
+                cooldown = os.path.join(cache_dir, "auth_cooldown")
+                with open(creds, "w") as handle:
+                    handle.write(
+                        "# Written by omarchy-coros\nCOROS_EMAIL=user@example.com\nCOROS_PASSWORD=secret\nCOROS_REGION=eu\n"
+                    )
+                os.chmod(creds, 0o600)
+                with open(token, "w") as handle:
+                    json.dump(
+                        {
+                            "access_token": "tok",
+                            "user_id": 7,
+                            "region": "eu",
+                            "timestamp_ms": int(time.time() * 1000),
+                        },
+                        handle,
+                    )
+                with open(cooldown, "w"):
+                    pass
+                http = self.fake([])
+                code, out, err = self.run_cli(["logout"])
+            self.assertEqual(code, 0)
+            snap = json.loads(out)
+            self.assertEqual(snap["error"], "auth")
+            self.assertEqual(snap["hrv"], None)
+            self.assertTrue(out.endswith("\n"))
+            self.assertEqual(out.count("\n"), 1)
+            self.assertFalse(os.path.exists(creds))
+            self.assertFalse(os.path.exists(token))
+            self.assertFalse(os.path.exists(cooldown))
+            self.assertEqual(http.calls, [])
+            self.assertNotIn("secret", out)
+            self.assertNotIn("secret", err)
+
+    def test_logout_without_files_is_auth(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            code, out, _ = self.run_cli(["logout"])
+        self.assertEqual(code, 0)
+        expected = dict(NULLS)
+        expected["error"] = "auth"
+        self.assertEqual(json.loads(out), expected)
+
+    def test_activity_name_is_capped(self):
+        long_name = "R" * 200
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", [day_payload()]),
+                ("activity/query", [activity_payload(name=long_name)]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["activity"], "R" * 120)
 
 
 if __name__ == "__main__":

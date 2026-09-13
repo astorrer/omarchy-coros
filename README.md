@@ -18,8 +18,9 @@ omarchy plugin add https://github.com/astorrer/omarchy-coros.git --enable
 Then run setup from the plugin folder (python check + optional dev symlink).
 Sign in from the COROS panel on the bar — email, password, and region.
 Credentials land in `~/.config/omarchy-coros/credentials` (mode 0600, never
-in git, never in widget settings, never on argv). The password is hashed
-for the login call; only the access token is cached
+in git, never in widget settings, never on argv). The password is stored
+there so the 24h token refresh can log in again; it is hashed (MD5) for
+the login call. The access token is cached separately
 (`~/.cache/omarchy-coros/token.json`, mode 0600, 24h TTL).
 
 ```sh
@@ -68,8 +69,8 @@ Open from the gear in the panel, or Omarchy Settings → Bar → COROS:
 (`teameuapi` for `eu`, `teamapi` for `us`), caches the auth token in
 `~/.cache/omarchy-coros/token.json` (mode 0600, 24h TTL), and prints one JSON
 snapshot object on stdout. The widget polls `coros.py snapshot` every
-`refreshIntervalMin`. The password is hashed for the login call and never
-stored.
+`refreshIntervalMin`. The password lives in the credentials file (0600);
+the token cache is separate.
 
 ## Remove
 

@@ -1,5 +1,6 @@
 __pycache__/
 .ruff_cache/
 token.json
+credentials
 .cache/
 .worktrees/

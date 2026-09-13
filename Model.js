@@ -10,10 +10,17 @@ var REFRESH_STEP_MINUTES = 15
 function parseJson(raw) {
   try {
     var parsed = JSON.parse(String(raw || "").trim())
-    return parsed && typeof parsed === "object" ? parsed : null
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null
   } catch (e) {
     return null
   }
+}
+
+function parseError(value) {
+  if (typeof value !== "string") return null
+  var s = value.trim()
+  if (s === "auth" || s === "network") return s
+  return s === "" ? null : "network"
 }
 
 function num(value) {
@@ -55,7 +62,7 @@ function parseSnapshot(raw) {
     activity: str(parsed.activity),
     activityDay: str(parsed.activityDay),
     day: str(parsed.day),
-    error: str(parsed.error)
+    error: parseError(parsed.error)
   }
 }
 
@@ -76,7 +83,20 @@ function hrvDelta(hrv, baseline) {
   return h - b
 }
 
+function authError(snapshot) {
+  return !!(snapshot && typeof snapshot === "object" && snapshot.error === "auth")
+}
+
+function networkError(snapshot) {
+  return !!(snapshot && typeof snapshot === "object" && snapshot.error === "network")
+}
+
+function signedIn(snapshot) {
+  return !!(snapshot && typeof snapshot === "object" && !authError(snapshot) && !networkError(snapshot))
+}
+
 function isEmpty(snapshot) {
+  if (networkError(snapshot)) return false
   if (!snapshot || typeof snapshot !== "object") return true
   return num(snapshot.hrv) === null
     && num(snapshot.hrvBaseline) === null
@@ -385,7 +405,7 @@ function validBarMetric(value) {
 
 function formatBar(snapshot, metric) {
   try {
-    if (!signedIn(snapshot)) return ""
+    if (networkError(snapshot) || !signedIn(snapshot)) return ""
     metric = validBarMetric(metric)
     if (metric === "icon") return ""
     if (metric === "hrv") {
@@ -406,14 +426,6 @@ function formatBar(snapshot, metric) {
   } catch (e) {
     return ""
   }
-}
-
-function authError(snapshot) {
-  return !!(snapshot && typeof snapshot === "object" && snapshot.error === "auth")
-}
-
-function signedIn(snapshot) {
-  return !!(snapshot && typeof snapshot === "object" && !authError(snapshot))
 }
 
 function formatDelta(d) {
@@ -445,7 +457,7 @@ function formatRefreshLabel(minutes) {
 // the panel and tooltip. Prefer HRV, then RHR, then load.
 function formatSnapshot(snapshot) {
   try {
-    if (!signedIn(snapshot)) return ""
+    if (networkError(snapshot) || !signedIn(snapshot)) return ""
     var hrv = num(snapshot.hrv)
     if (hrv !== null) return "HRV " + hrv
     var rhr = num(snapshot.rhr)
@@ -461,6 +473,7 @@ function formatSnapshot(snapshot) {
 function formatTooltip(snapshot) {
   try {
     if (authError(snapshot)) return "COROS — sign in from the panel"
+    if (networkError(snapshot)) return "COROS — can't reach Training Hub"
     if (!snapshot || typeof snapshot !== "object") return "COROS"
     var parts = []
     var day = formatDay(snapshot.day)

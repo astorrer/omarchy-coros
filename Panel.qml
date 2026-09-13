@@ -19,8 +19,16 @@ Panel {
   property string draftEmail: ""
   property string draftPassword: ""
   property string draftRegion: "eu"
+  property bool cursorActive: false
+  property string focusSection: "refresh"
+  property int regionIndex: 1
+  property int metricIndex: 1
+  property int intervalIndex: 0
+  readonly property var loginRegions: ["us", "eu"]
+  readonly property var barMetrics: ["icon", "hrv", "rhr", "load", "fatigue"]
+  readonly property var settingsSections: ["back", "metric", "hide", "interval", "overnight", "load", "activity", "account", "signout"]
 
-  readonly property var client: hostWidget
+  property var client: null
   readonly property var snapshot: client ? client.snapshot : null
   readonly property bool showLogin: view === "login" || (view === "main" && Model.authError(snapshot))
   readonly property string regionText: Model.regionLabel(client ? client.region : "eu")
@@ -31,6 +39,7 @@ Panel {
     if (client.loginBusy) return "Signing in…"
     if (!snapshot) return "Checking COROS…"
     if (Model.authError(snapshot)) return "Sign in required"
+    if (Model.networkError(snapshot)) return "Can't reach Training Hub"
     if (Model.isEmpty(snapshot)) return "Signed in · " + regionText + " · waiting on metrics"
     return "Signed in · " + regionText
   }
@@ -56,6 +65,7 @@ Panel {
   property int phraseIndex: 0
   readonly property string heroStatusText: {
     if (showLogin) return ""
+    if (Model.networkError(snapshot)) return "Can't reach Training Hub"
     if (!snapshot || Model.isEmpty(snapshot)) return "Waiting on metrics"
     if (heroPhraseList.length === 0) return "Signed in · " + regionText
     return heroPhraseList[phraseIndex % heroPhraseList.length]
@@ -102,10 +112,14 @@ Panel {
   function goBack() {
     if (root.view === "login") {
       root.view = root.loginReturn
+      cursorActive = false
+      focusSection = root.loginReturn === "settings" ? "back" : "refresh"
       return
     }
     if (root.view === "settings") {
       root.view = "main"
+      cursorActive = false
+      focusSection = "refresh"
       return
     }
     root.close()
@@ -113,6 +127,8 @@ Panel {
 
   function openSettings() {
     root.view = "settings"
+    cursorActive = false
+    focusSection = "back"
     if (panelFlick) panelFlick.contentY = 0
   }
 
@@ -120,14 +136,134 @@ Panel {
     root.loginReturn = root.view === "settings" ? "settings" : "main"
     draftRegion = client && client.region === "us" ? "us" : "eu"
     draftPassword = ""
+    cursorActive = false
+    focusSection = "region"
+    regionIndex = draftRegion === "us" ? 0 : 1
     root.view = "login"
+    if (keyCatcher) keyCatcher.forceActiveFocus()
   }
 
   function submitLogin() {
     if (!client || client.loginBusy) return
     client.saveLogin(draftEmail, draftPassword, draftRegion)
     draftPassword = ""
+    cursorActive = false
+    focusSection = "refresh"
     root.view = "main"
+    if (keyCatcher) keyCatcher.forceActiveFocus()
+  }
+
+  function signOut() {
+    if (!client) return
+    client.logout()
+    draftPassword = ""
+    cursorActive = false
+    focusSection = "refresh"
+    root.view = "main"
+    if (keyCatcher) keyCatcher.forceActiveFocus()
+  }
+
+  function setCursor(section, index) {
+    cursorActive = true
+    focusSection = section
+    if (index === undefined || index < 0) return
+    if (section === "region") regionIndex = index
+    else if (section === "metric") metricIndex = index
+    else if (section === "interval") intervalIndex = index
+  }
+
+  function armCursor() {
+    cursorActive = true
+    if (showLogin) {
+      if (focusSection !== "region" && focusSection !== "signin") {
+        focusSection = "region"
+        regionIndex = draftRegion === "us" ? 0 : 1
+      }
+    } else if (view === "settings") {
+      if (settingsSections.indexOf(focusSection) < 0) focusSection = "back"
+    } else if (focusSection !== "refresh" && focusSection !== "settings") {
+      focusSection = "refresh"
+    }
+  }
+
+  function moveCursor(dx, dy) {
+    if (showLogin) moveLoginCursor(dx, dy)
+    else if (view === "settings") moveSettingsCursor(dx, dy)
+    else moveMainCursor(dy)
+  }
+
+  function moveLoginCursor(dx, dy) {
+    if (focusSection !== "region" && focusSection !== "signin") {
+      focusSection = "region"
+      regionIndex = draftRegion === "us" ? 0 : 1
+    }
+    if (dy < 0) focusSection = "region"
+    else if (dy > 0) focusSection = "signin"
+    if (dx !== 0 && focusSection === "region")
+      regionIndex = Math.max(0, Math.min(loginRegions.length - 1, regionIndex + dx))
+  }
+
+  function moveMainCursor(dy) {
+    if (dy === 0) return
+    focusSection = dy > 0 ? "settings" : "refresh"
+  }
+
+  function moveSettingsCursor(dx, dy) {
+    if (dy !== 0) {
+      var i = settingsSections.indexOf(focusSection)
+      if (i < 0) i = 0
+      focusSection = settingsSections[Math.max(0, Math.min(settingsSections.length - 1, i + dy))]
+      if (focusSection === "metric") {
+        var m = barMetrics.indexOf(client ? client.barMetric : "hrv")
+        metricIndex = m < 0 ? 1 : m
+      }
+    }
+    if (dx !== 0) {
+      if (focusSection === "metric")
+        metricIndex = Math.max(0, Math.min(barMetrics.length - 1, metricIndex + dx))
+      else if (focusSection === "interval")
+        intervalIndex = Math.max(0, Math.min(1, intervalIndex + dx))
+      else if (focusSection === "account" && dx > 0)
+        focusSection = "signout"
+      else if (focusSection === "signout" && dx < 0)
+        focusSection = "account"
+    }
+  }
+
+  function activateCursor() {
+    if (!cursorActive) return
+    if (showLogin) {
+      if (focusSection === "signin") submitLogin()
+      else if (focusSection === "region") draftRegion = loginRegions[regionIndex] || "eu"
+      return
+    }
+    if (view === "settings") {
+      if (focusSection === "back") goBack()
+      else if (focusSection === "metric") {
+        if (client && metricIndex >= 0 && metricIndex < barMetrics.length)
+          client.writeSetting("barMetric", barMetrics[metricIndex])
+      } else if (focusSection === "hide") {
+        if (client) client.writeSetting("hideWhenNoData", !client.hideWhenNoData)
+      } else if (focusSection === "interval") {
+        bumpRefresh(intervalIndex === 0 ? -1 : 1)
+      } else if (focusSection === "overnight") {
+        if (client) client.writeSetting("showRecovery", !client.showRecovery)
+      } else if (focusSection === "load") {
+        if (client) client.writeSetting("showLoad", !client.showLoad)
+      } else if (focusSection === "activity") {
+        if (client) client.writeSetting("showActivity", !client.showActivity)
+      } else if (focusSection === "account") {
+        openLogin()
+      } else if (focusSection === "signout") {
+        signOut()
+      }
+      return
+    }
+    if (focusSection === "refresh") {
+      if (client) client.refresh()
+    } else if (focusSection === "settings") {
+      openSettings()
+    }
   }
 
   function openProject() {
@@ -141,6 +277,10 @@ Panel {
   }
 
   onHeroMoodChanged: phraseIndex = 0
+  onOpenedChanged: if (opened) {
+    cursorActive = false
+    Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+  }
 
   Timer {
     id: phraseTimer
@@ -578,9 +718,26 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: emailField.activeFocus || passwordField.activeFocus
       onCloseRequested: root.goBack()
       onTabRequested: function(direction) {
         root.switchPanel(direction)
+      }
+      onMoveRequested: function(dx, dy) {
+        if (root.showLogin && !root.cursorActive && dy > 0) {
+          emailField.forceActiveFocus()
+          return
+        }
+        if (!root.cursorActive) {
+          root.armCursor()
+          return
+        }
+        root.moveCursor(dx, dy)
+      }
+      onActivateRequested: root.activateCursor()
+      onTextKey: function(t) {
+        if ((t === "r" || t === "R") && root.client && !root.showLogin)
+          root.client.refresh()
       }
 
       Flickable {
@@ -621,16 +778,18 @@ Panel {
             foreground: root.barForeground
             bordered: true
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "back"
+            onHovered: function(on) { if (on) root.setCursor("back") }
             onClicked: root.goBack()
           }
         }
 
         Text {
           width: parent.width
-          visible: root.statusText !== "" && root.view !== "settings" && (root.showLogin || Model.isEmpty(root.snapshot) || (root.client && root.client.actionStatus !== ""))
+          visible: root.statusText !== "" && root.view !== "settings" && (root.showLogin || Model.isEmpty(root.snapshot) || Model.networkError(root.snapshot) || (root.client && root.client.actionStatus !== ""))
           textFormat: Text.PlainText
           text: root.statusText
-          color: Model.authError(root.snapshot) && !(root.client && root.client.actionStatus) ? Color.urgent : root.dim
+          color: (Model.authError(root.snapshot) || Model.networkError(root.snapshot)) && !(root.client && root.client.actionStatus) ? Color.urgent : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
@@ -650,6 +809,11 @@ Panel {
             foreground: root.barForeground
             onTextChanged: root.draftEmail = text
             Keys.onReturnPressed: passwordField.forceActiveFocus()
+            Keys.onEscapePressed: function(event) {
+              root.goBack()
+              keyCatcher.forceActiveFocus()
+              event.accepted = true
+            }
           }
 
           TextField {
@@ -661,6 +825,11 @@ Panel {
             foreground: root.barForeground
             onTextChanged: root.draftPassword = text
             onAccepted: root.submitLogin()
+            Keys.onEscapePressed: function(event) {
+              root.goBack()
+              keyCatcher.forceActiveFocus()
+              event.accepted = true
+            }
           }
 
           Text {
@@ -682,7 +851,11 @@ Panel {
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             focusable: false
+            cursorIndex: root.cursorActive && root.showLogin && root.focusSection === "region" ? root.regionIndex : -1
             onChanged: function(value) { root.draftRegion = value }
+            onHovered: function(index, isHovered) {
+              if (isHovered) root.setCursor("region", index)
+            }
           }
 
           Text {
@@ -702,6 +875,8 @@ Panel {
             text: root.client && root.client.loginBusy ? "Signing in…" : "Sign in"
             foreground: root.barForeground
             enabled: !(root.client && root.client.loginBusy)
+            hasCursor: root.cursorActive && root.showLogin && root.focusSection === "signin"
+            onHovered: function(on) { if (on) root.setCursor("signin") }
             onClicked: root.submitLogin()
           }
         }
@@ -716,9 +891,11 @@ Panel {
             id: header
             width: parent.width
             implicitHeight: hero.implicitHeight
+            readonly property bool refreshHasCursor: root.cursorActive && root.view === "main" && !root.showLogin && root.focusSection === "refresh"
             function refreshNow() {
               if (root.client) root.client.refresh()
             }
+            function focusRefresh() { root.setCursor("refresh") }
 
             PanelHero {
               id: hero
@@ -739,6 +916,8 @@ Panel {
                   tooltipText: "Refresh"
                   foreground: hero.foreground
                   fontFamily: hero.fontFamily
+                  hasCursor: header.refreshHasCursor
+                  onHovered: function(on) { if (on) header.focusRefresh() }
                   onClicked: header.refreshNow()
                 }
               }
@@ -897,6 +1076,8 @@ Panel {
               foreground: root.barForeground
               fontFamily: root.fontFamily
               Layout.alignment: Qt.AlignVCenter
+              hasCursor: root.cursorActive && root.view === "main" && !root.showLogin && root.focusSection === "settings"
+              onHovered: function(on) { if (on) root.setCursor("settings") }
               onClicked: root.openSettings()
             }
           }
@@ -928,8 +1109,12 @@ Panel {
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             focusable: false
+            cursorIndex: root.cursorActive && root.view === "settings" && root.focusSection === "metric" ? root.metricIndex : -1
             onChanged: function(value) {
               if (root.client) root.client.writeSetting("barMetric", value)
+            }
+            onHovered: function(index, isHovered) {
+              if (isHovered) root.setCursor("metric", index)
             }
           }
 
@@ -941,6 +1126,8 @@ Panel {
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             titleSize: Style.font.body
+            hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "hide"
+            onHovered: function(on) { if (on) root.setCursor("hide") }
             onClicked: {
               if (root.client) {
                 root.client.writeSetting("hideWhenNoData", !root.client.hideWhenNoData)
@@ -965,6 +1152,8 @@ Panel {
               iconText: "−"
               tooltipText: "Faster"
               foreground: root.barForeground
+              hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "interval" && root.intervalIndex === 0
+              onHovered: function(on) { if (on) root.setCursor("interval", 0) }
               onClicked: root.bumpRefresh(-1)
             }
 
@@ -972,6 +1161,8 @@ Panel {
               iconText: "+"
               tooltipText: "Slower"
               foreground: root.barForeground
+              hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "interval" && root.intervalIndex === 1
+              onHovered: function(on) { if (on) root.setCursor("interval", 1) }
               onClicked: root.bumpRefresh(1)
             }
           }
@@ -991,6 +1182,8 @@ Panel {
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             titleSize: Style.font.body
+            hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "overnight"
+            onHovered: function(on) { if (on) root.setCursor("overnight") }
             onClicked: {
               if (root.client) root.client.writeSetting("showRecovery", !root.client.showRecovery)
             }
@@ -1004,6 +1197,8 @@ Panel {
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             titleSize: Style.font.body
+            hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "load"
+            onHovered: function(on) { if (on) root.setCursor("load") }
             onClicked: {
               if (root.client) root.client.writeSetting("showLoad", !root.client.showLoad)
             }
@@ -1017,6 +1212,8 @@ Panel {
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             titleSize: Style.font.body
+            hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "activity"
+            onHovered: function(on) { if (on) root.setCursor("activity") }
             onClicked: {
               if (root.client) root.client.writeSetting("showActivity", !root.client.showActivity)
             }
@@ -1039,12 +1236,29 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
-          Button {
+          RowLayout {
             width: parent.width
-            text: "Change account"
-            foreground: root.barForeground
-            bordered: true
-            onClicked: root.openLogin()
+            spacing: Style.space(8)
+
+            Button {
+              text: "Change account"
+              foreground: root.barForeground
+              bordered: true
+              Layout.fillWidth: true
+              hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "account"
+              onHovered: function(on) { if (on) root.setCursor("account") }
+              onClicked: root.openLogin()
+            }
+
+            Button {
+              text: "Sign out"
+              foreground: root.barForeground
+              bordered: true
+              Layout.fillWidth: true
+              hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "signout"
+              onHovered: function(on) { if (on) root.setCursor("signout") }
+              onClicked: root.signOut()
+            }
           }
         }
       }

@@ -6,14 +6,17 @@ metrics as JSON for the bar widget to poll:
 
     coros.py snapshot [--region eu|us]
     coros.py watch [--region eu|us] [--interval N]
+    coros.py login    # JSON {email,password,region} on stdin
+    coros.py logout   # delete credentials, token cache, cooldown
 
-Credentials come from COROS_EMAIL / COROS_PASSWORD, or from the setup.sh
-credentials file (~/.config/omarchy-coros/credentials, mode 0600); the
-password is never stored, only the access token is cached in
-~/.cache/omarchy-coros/token.json. After logins fail on both regions,
-further polls back off for an hour so a widget polling on a timer cannot
-lock the account. One-shot commands print exactly one JSON object on
-stdout; watch streams NDJSON.
+Credentials come from COROS_EMAIL / COROS_PASSWORD, or from the credentials
+file (~/.config/omarchy-coros/credentials, mode 0600) written by the panel
+login. The password is stored in that file so 24h token refresh can log in
+again; the access token is cached separately in
+~/.cache/omarchy-coros/token.json (mode 0600, 24h TTL). After logins fail
+on both regions, further polls back off for an hour so a widget polling on
+a timer cannot lock the account. One-shot commands print exactly one JSON
+object on stdout; watch streams NDJSON.
 """
 
 import hashlib
@@ -33,6 +36,9 @@ REGION_IDS = {1: "us", 3: "eu"}
 TOKEN_TTL_MS = 24 * 3600 * 1000
 REQUEST_TIMEOUT_S = 15
 DEFAULT_INTERVAL_S = 30
+MAX_BODY_BYTES = 2 * 1024 * 1024
+ACTIVITY_NAME_MAX = 120
+ALLOWED_HOSTS = frozenset(urllib.parse.urlparse(url).hostname for url in BASES.values())
 
 NULL_SNAPSHOT = {
     "hrv": None,
@@ -65,6 +71,27 @@ NULL_SNAPSHOT = {
 COOLDOWN_S = 3600
 
 
+class NetworkError(Exception):
+    """Transport, timeout, redirect, or unparseable HTTP body — not a login reject."""
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlparse(newurl)
+        orig = urllib.parse.urlparse(req.full_url)
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme == "https"
+            and host in ALLOWED_HOSTS
+            and host == (orig.hostname or "").lower()
+        ):
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+        raise NetworkError("HTTP redirect refused")
+
+
+_OPENER = urllib.request.build_opener(NoRedirectHandler())
+
+
 def eprint(msg):
     sys.stderr.write(str(msg) + "\n")
     sys.stderr.flush()
@@ -83,11 +110,20 @@ def config_dir():
     return os.path.join(base, "omarchy-coros")
 
 
+def credential_ok(value):
+    """Reject values that would break or inject KEY=value lines."""
+    if not value or not isinstance(value, str):
+        return False
+    return not any(ch in value for ch in "\n\r=")
+
+
 def read_config_file():
-    """KEY=value pairs from the setup.sh credentials file (0600)."""
+    """KEY=value pairs from the credentials file (0600)."""
     values = {}
     try:
         with open(os.path.join(config_dir(), "credentials"), encoding="utf-8") as handle:
+            if os.fstat(handle.fileno()).st_mode & 0o077:
+                return {}  # refuse group/other-readable credentials
             for line in handle:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
@@ -108,6 +144,10 @@ def credentials():
 
 
 def write_credentials(email, password, region):
+    if not credential_ok(email) or not credential_ok(password):
+        raise ValueError("credentials contain a newline, CR, or '='")
+    if region not in BASES:
+        raise ValueError("invalid region")
     parent = config_dir()
     os.makedirs(parent, mode=0o700, exist_ok=True)
     os.chmod(parent, 0o700)
@@ -163,20 +203,46 @@ def load_token():
             if os.fstat(handle.fileno()).st_mode & 0o077:
                 return None  # refuse group/other-readable cache
             entry = json.load(handle)
-        if not entry.get("access_token") or entry.get("user_id") is None:
+        token = coerce_token(entry.get("access_token"))
+        user_id = coerce_user_id(entry.get("user_id"))
+        if not token or user_id is None:
             return None
         if entry.get("region") not in BASES:
             return None
         age_ms = time.time() * 1000 - float(entry.get("timestamp_ms") or 0)
         if age_ms < 0 or age_ms > TOKEN_TTL_MS:
             return None
+        entry["access_token"] = token
+        entry["user_id"] = user_id
         return entry
     except (OSError, ValueError):
         return None
 
 
+def coerce_token(value):
+    if isinstance(value, (bool, dict, list)) or value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def coerce_user_id(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def save_token(access_token, user_id, region):
+    access_token = coerce_token(access_token)
+    user_id = coerce_user_id(user_id)
+    if not access_token or user_id is None or region not in BASES:
+        return
     path = cache_file()
+    tmp = None
+    fd = -1
     try:
         parent = os.path.dirname(path)
         os.makedirs(parent, mode=0o700, exist_ok=True)
@@ -189,24 +255,51 @@ def save_token(access_token, user_id, region):
                 "timestamp_ms": int(time.time() * 1000),
             }
         ).encode("utf-8")
-        # 0o600 at creation: a new file is never world-readable, not even
-        # briefly. umask can only narrow these bits, so creation is safe; the
-        # fchmod covers a pre-existing file with looser mode (O_TRUNC keeps
-        # its mode). Truncation happens before the chmod, but an empty file
-        # leaks nothing and the token is only written after.
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        tmp = path + ".tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(tmp, flags, 0o600)
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "wb") as handle:
+            fd = -1
             handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        tmp = None
     except OSError as exc:
         eprint("coros.py: could not cache token: " + str(exc))
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def http_open(req, timeout=REQUEST_TIMEOUT_S):
+    return _OPENER.open(req, timeout=timeout)
 
 
 def http_json(method, url, headers, payload=None):
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(url, data=body, headers=dict(headers or {}), method=method)
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with http_open(req, timeout=REQUEST_TIMEOUT_S) as resp:
+            raw = resp.read(MAX_BODY_BYTES + 1)
+            if len(raw) > MAX_BODY_BYTES:
+                raise NetworkError("response too large")
+            return json.loads(raw.decode("utf-8"))
+    except NetworkError:
+        raise
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, TimeoutError) as exc:
+        raise NetworkError(str(exc)) from exc
 
 
 def result_code(resp):
@@ -246,8 +339,8 @@ def do_login(email, password, region):
         raise ValueError("login returned result " + str(code) + message)
     data = resp.get("data") if isinstance(resp, dict) else None
     data = data if isinstance(data, dict) else {}
-    token = data.get("accessToken")
-    user_id = data.get("userId", data.get("userID", data.get("id")))
+    token = coerce_token(data.get("accessToken"))
+    user_id = coerce_user_id(data.get("userId", data.get("userID", data.get("id"))))
     if not token or user_id is None:
         raise ValueError("login response has no access token")
     used = region_from_login(data, region)
@@ -356,7 +449,7 @@ def last_activity(resp):
     name = None
     for key in ("name", "workoutName", "title", "label"):
         if item.get(key):
-            name = str(item[key])
+            name = str(item[key])[:ACTIVITY_NAME_MAX]
             break
     return name, iso_day(item.get("date"))
 
@@ -398,6 +491,10 @@ def week_entry(resp):
 def parse_snapshot(day, activity, activity_day=None, week=None):
     day = day if isinstance(day, dict) else {}
     week = week if isinstance(week, dict) else {}
+    if isinstance(activity, str):
+        activity = activity[:ACTIVITY_NAME_MAX]
+    elif activity is not None:
+        activity = str(activity)[:ACTIVITY_NAME_MAX]
     rhr = num(day.get("rhr"))
     test_rhr = num(day.get("testRhr"))
     if rhr is None:
@@ -463,6 +560,9 @@ def get_snapshot(region):
         # Training Hub often leaves today blank until overnight HRV lands;
         # walk the trailing week and keep the newest day that has recovery data.
         detail = get("/analyse/dayDetail/query?" + urllib.parse.urlencode({"startDay": week_ago, "endDay": today}))
+        detail_code = result_code(detail)
+        if detail_code is not None and detail_code != 0:
+            raise NetworkError("dayDetail result " + str(detail_code))
         activity, activity_day = last_activity(
             get(
                 "/activity/query?"
@@ -516,28 +616,54 @@ def cmd_login():
     region = str(body.get("region") or "eu").strip().lower()
     if region not in BASES:
         region = "eu"
-    if not email or not password:
+    if not email or not password or not credential_ok(email) or not credential_ok(password):
         snap = dict(NULL_SNAPSHOT)
         snap["error"] = "auth"
         print(json.dumps(snap), flush=True)
         return 0
     try:
-        write_credentials(email, password, region)
+        _token, _user_id, used = login(email, password, region)
+    except ValueError as exc:
+        eprint("coros.py: login failed: " + str(exc))
+        trip_cooldown()
+        snap = dict(NULL_SNAPSHOT)
+        snap["error"] = "auth"
+        print(json.dumps(snap), flush=True)
+        return 0
+    except Exception as exc:  # noqa: BLE001 - display path always prints valid JSON, never fails
+        eprint("coros.py: login failed: " + str(exc))
+        snap = dict(NULL_SNAPSHOT)
+        snap["error"] = "network"
+        print(json.dumps(snap), flush=True)
+        return 0
+    if used not in BASES:
+        used = region
+    try:
+        write_credentials(email, password, used)
         clear_cooldown()
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         eprint("coros.py: could not write credentials: " + str(exc))
         snap = dict(NULL_SNAPSHOT)
         snap["error"] = "auth"
         print(json.dumps(snap), flush=True)
         return 0
-    snap = get_snapshot(region)
-    cached = load_token()
-    used = cached.get("region") if cached else None
-    if used in BASES and used != region:
+    snap = get_snapshot(used)
+    print(json.dumps(snap), flush=True)
+    return 0
+
+
+def cmd_logout():
+    """Delete credentials, token cache, and cooldown. Print an auth snapshot.
+
+    Always one JSON object on stdout, exit 0. Never prints the password.
+    """
+    for path in (os.path.join(config_dir(), "credentials"), cache_file(), cooldown_file()):
         try:
-            write_credentials(email, password, used)
-        except OSError as exc:
-            eprint("coros.py: could not update stored region: " + str(exc))
+            os.unlink(path)
+        except OSError:
+            pass
+    snap = dict(NULL_SNAPSHOT)
+    snap["error"] = "auth"
     print(json.dumps(snap), flush=True)
     return 0
 
@@ -571,18 +697,21 @@ def usage():
     return (
         "usage: coros.py snapshot [--region eu|us]\n"
         "       coros.py watch [--region eu|us] [--interval N]\n"
-        "       coros.py login   # JSON {email,password,region} on stdin"
+        "       coros.py login   # JSON {email,password,region} on stdin\n"
+        "       coros.py logout  # delete credentials, token cache, cooldown"
     )
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("snapshot", "watch", "login"):
+    if not argv or argv[0] not in ("snapshot", "watch", "login", "logout"):
         eprint(usage())
         return 2
     command = argv[0]
     if command == "login":
         return cmd_login()
+    if command == "logout":
+        return cmd_logout()
     region_flag = None
     interval = DEFAULT_INTERVAL_S
     rest = argv[1:]

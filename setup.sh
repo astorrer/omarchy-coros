@@ -1,7 +1,8 @@
 #!/bin/bash
-# No system dependencies: coros.py is stdlib-only. Prompts for COROS
-# credentials, stores them in ~/.config/omarchy-coros/credentials (0600),
-# and tests the login before finishing.
+# No system dependencies: coros.py is stdlib-only. Checks python3 and
+# optionally writes a dev symlink. Sign-in lives in the panel, not here.
+# If COROS_EMAIL / COROS_PASSWORD are already in the environment, they are
+# stored in ~/.config/omarchy-coros/credentials (0600) for headless installs.
 #
 # Ownership rule (konnectarchy pattern): every file this script writes
 # carries a marker, and `setup.sh uninstall` only removes marked files it
@@ -9,8 +10,11 @@
 set -euo pipefail
 
 PLUGIN_ID="io.github.astorrer.omarchy-coros"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 LINK_DIR="$HOME/.config/omarchy/plugins"
-CONF_DIR="$HOME/.config/omarchy-coros"
+CONF_DIR="$CONFIG_HOME/omarchy-coros"
+CACHE_DIR="$CACHE_HOME/omarchy-coros"
 CREDS="$CONF_DIR/credentials"
 CREDS_MARK="# Written by omarchy-coros"
 
@@ -29,9 +33,9 @@ uninstall() {
   else
     echo "No omarchy-coros dev symlink found (foreign links left alone)."
   fi
-  if [[ -d $HOME/.cache/omarchy-coros ]]; then
-    rm -rf "$HOME/.cache/omarchy-coros"
-    echo "Removed ~/.cache/omarchy-coros"
+  if [[ -d $CACHE_DIR ]]; then
+    rm -rf "$CACHE_DIR"
+    echo "Removed $CACHE_DIR"
   else
     echo "No omarchy-coros cache found."
   fi
@@ -86,6 +90,7 @@ if [[ -n ${COROS_EMAIL:-} && -n ${COROS_PASSWORD:-} ]]; then
     exit 1
   fi
   mkdir -p "$CONF_DIR"
+  chmod 700 "$CONF_DIR"
   umask 077
   {
     echo "$CREDS_MARK"

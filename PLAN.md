@@ -16,7 +16,8 @@ sleep, training load) on the bar. Follows the omdeako pattern.
   is training impact balance, not time in bed.
 - Auth: `POST /account/login {account, accountType:2, pwd: md5}`, token cached
   in `~/.cache/omarchy-coros/token.json` mode 0600, 24h TTL. Retry login on
-  `1019`, try other region. Password never stored.
+  `1019`, try other region. Password lives in the credentials file (0600);
+  token cache is separate.
 
 ## Contract (branches must agree)
 

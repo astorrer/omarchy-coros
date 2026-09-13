@@ -7,7 +7,7 @@ const source = fs
 
 const Model = new Function(
   source +
-    "; return { parseSnapshot, hrvDelta, isEmpty, authError, signedIn, formatDelta, regionLabel, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases }"
+    "; return { parseSnapshot, hrvDelta, isEmpty, authError, networkError, signedIn, formatDelta, regionLabel, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases }"
 )()
 
 let failures = 0
@@ -48,7 +48,12 @@ const snap = {
 check(/^\d+\.\d+\.\d+$/.test(Model.PLUGIN_VERSION), true, "PLUGIN_VERSION is semver")
 check(Model.signedIn(snap), true, "signedIn ok")
 check(Model.signedIn({ error: "auth" }), false, "signedIn auth error")
+check(Model.signedIn({ error: "network" }), false, "signedIn network error")
 check(Model.authError({ error: "auth" }), true, "authError")
+check(Model.authError({ error: "network" }), false, "authError not network")
+check(Model.networkError({ error: "network" }), true, "networkError")
+check(Model.networkError({ error: "auth" }), false, "networkError not auth")
+check(Model.networkError(null), false, "networkError null")
 check(Model.REFRESH_MIN_MINUTES, 15, "refresh min")
 check(Model.REFRESH_MAX_MINUTES, 1440, "refresh max")
 check(Model.REFRESH_DEFAULT_MINUTES, 30, "refresh default")
@@ -66,6 +71,7 @@ check(Model.loadStateLabel(1), "Recovering", "loadState recovering")
 check(Model.fatigueStateLabel(1), "Fresh", "fatigueState fresh")
 check(Model.formatSnapshot(snap), "HRV 24", "bar is compact HRV")
 check(Model.formatSnapshot({ error: "auth" }), "", "bar empty on auth error")
+check(Model.formatSnapshot({ error: "network", hrv: 24 }), "", "bar empty on network error")
 check(Model.formatSnapshot({ hrv: null, rhr: 61, load: 0, error: null }), "RHR 61", "bar falls back to RHR")
 check(Model.formatDay("2026-09-10"), "Sep 10", "formatDay iso")
 check(Model.formatDay(20260907), "Sep 7", "formatDay yyyymmdd")
@@ -75,8 +81,12 @@ check(
   "tooltip lists details"
 )
 check(Model.formatTooltip({ error: "auth" }), "COROS — sign in from the panel", "tooltip auth")
+check(Model.formatTooltip({ error: "network" }), "COROS — can't reach Training Hub", "tooltip network")
+check(Model.formatTooltip({ error: "network", hrv: 24 }), "COROS — can't reach Training Hub", "tooltip network ignores metrics")
 check(Model.isEmpty({ hrv: null, hrvBaseline: null, rhr: null, load: null, activity: null, error: null }), true, "isEmpty")
 check(Model.isEmpty(snap), false, "isEmpty with data")
+check(Model.isEmpty({ error: "network" }), false, "isEmpty network is not hideable")
+check(Model.isEmpty({ hrv: null, hrvBaseline: null, rhr: null, load: null, load7d: null, fatigue: null, activity: null, error: "network" }), false, "isEmpty network with null metrics")
 
 const rows = Model.metricRows(snap)
 const grouped = Model.metricGroups(snap)
@@ -122,6 +132,7 @@ check(Model.fatigueTone(5), "bad", "fatigueTone fatigued")
 check(Model.heroMood(snap), "rest", "fresh recovering is rest")
 check(Model.heroPhrases(snap).length > 0, true, "rest has snippets")
 check(Model.heroMood({ error: "auth" }), "idle", "auth is idle")
+check(Model.heroMood({ error: "network" }), "idle", "network is idle")
 check(
   Model.heroMood({ hrv: 18, hrvBandLow: 22, hrvBandHigh: 30, fatigueState: 1, loadState: 1, error: null }),
   "low",
@@ -161,6 +172,7 @@ check(Model.validBarMetric("nope"), "hrv", "validBarMetric fallback")
 check(Model.formatBar(snap, "icon"), "", "formatBar icon is empty")
 check(Model.formatBar(snap, "rhr"), "RHR 61", "formatBar rhr")
 check(Model.formatBar(snap, "fatigue"), "Fresh", "formatBar fatigue")
+check(Model.formatBar({ error: "network", hrv: 24 }, "hrv"), "", "formatBar empty on network")
 check(Model.metricRows(snap, { recovery: false, load: false, activity: true }).length, 1, "rows activity only")
 check(Model.metricRows(snap, { recovery: true, load: false, activity: false })[0].label, "Resting HR", "rows recovery only")
 
@@ -168,6 +180,16 @@ const parsed = Model.parseSnapshot(JSON.stringify(snap))
 check(parsed.hrv, 24, "parseSnapshot hrv")
 check(parsed.balance, 25, "parseSnapshot balance")
 check(parsed.activity, "Eagle Mountain E-Mountain Bike", "parseSnapshot activity")
+check(parsed.error, null, "parseSnapshot null error")
+check(Model.parseSnapshot("{"), null, "parseSnapshot invalid json")
+check(Model.parseSnapshot("[]"), null, "parseSnapshot array")
+check(Model.parseSnapshot("null"), null, "parseSnapshot null")
+check(Model.parseSnapshot('{"error":"network"}').error, "network", "parseSnapshot network error")
+check(Model.parseSnapshot('{"error":"auth"}').error, "auth", "parseSnapshot auth error")
+check(Model.parseSnapshot('{"error":"timeout"}').error, "network", "parseSnapshot unknown string error")
+check(Model.parseSnapshot('{"error":1}').error, null, "parseSnapshot non-string error")
+check(Model.parseSnapshot('{"error":null}').error, null, "parseSnapshot json null error")
+check(Model.parseSnapshot('{"hrv":24,"error":"network"}').hrv, 24, "parseSnapshot keeps metrics with network")
 
 if (failures > 0) {
   console.error(`${failures} model checks failed`)

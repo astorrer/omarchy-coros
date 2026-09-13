@@ -102,9 +102,11 @@ check(bar_metric.get("defaultValue") == "hrv" and defaults["barMetric"] == "hrv"
 
 # Every settings key must be read somewhere in the QML.
 if (ROOT / "BarWidget.qml").is_file():
-    qml_source = (ROOT / "BarWidget.qml").read_text()
-    if (ROOT / "Panel.qml").is_file():
-        qml_source += (ROOT / "Panel.qml").read_text()
+    qml_source = ""
+    for name in ("BarWidget.qml", "Panel.qml", "Service.qml"):
+        path = ROOT / name
+        if path.is_file():
+            qml_source += path.read_text()
     for key in schema_keys:
         check(f'"{key}"' in qml_source, f"settings key {key} must be read somewhere in the QML")
 else:
@@ -168,7 +170,7 @@ fi
 OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 QMLLINT=$(command -v qmllint || echo /usr/lib/qt6/bin/qmllint)
 QML_FILES=""
-for f in BarWidget.qml Panel.qml Model.js CorosIcon.qml; do
+for f in BarWidget.qml Panel.qml Service.qml Model.js CorosIcon.qml; do
   [[ -f $f ]] && QML_FILES="$QML_FILES $f"
 done
 if [[ -n $QML_FILES ]] && [[ -x $QMLLINT ]] && [[ -d $OMARCHY_PATH/shell ]]; then
