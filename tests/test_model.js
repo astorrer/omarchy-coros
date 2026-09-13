@@ -7,7 +7,7 @@ const source = fs
 
 const Model = new Function(
   source +
-    "; return { parseSnapshot, hrvDelta, isEmpty, authError, signedIn, formatDelta, regionLabel, formatDay, loadStateLabel, fatigueStateLabel, metricRows, validBarMetric, formatBar, clampRefreshMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES }"
+    "; return { parseSnapshot, hrvDelta, isEmpty, authError, signedIn, formatDelta, regionLabel, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases }"
 )()
 
 let failures = 0
@@ -79,13 +79,83 @@ check(Model.isEmpty({ hrv: null, hrvBaseline: null, rhr: null, load: null, activ
 check(Model.isEmpty(snap), false, "isEmpty with data")
 
 const rows = Model.metricRows(snap)
-check(rows[0], { label: "Resting HR", value: "61" }, "row rhr")
-check(rows[1], { label: "Test RHR", value: "64" }, "row test rhr")
-check(rows[2], { label: "Impact balance", value: "25" }, "row balance")
-check(rows[3], { label: "Fatigue", value: "-25 · Fresh" }, "row fatigue")
-check(rows[4], { label: "Daily load", value: "0" }, "row daily load zero")
-check(rows[7], { label: "Load ratio", value: "0.16 · Recovering" }, "row load ratio")
-check(rows[8], { label: "This week", value: "18 · rec 210–315" }, "row week")
+const grouped = Model.metricGroups(snap)
+check(grouped.recovery.length, 3, "overnight tiles")
+check(grouped.load.length, 3, "load tiles")
+check(grouped.bars.length, 2, "load bars")
+check(grouped.activity.length, 1, "activity row")
+check(rows[0].label, "Resting HR", "row rhr label")
+check(rows[0].value, "61", "row rhr value")
+check(rows[0].icon, Model.ICON.rhr, "row rhr icon")
+check(rows[0].hint, "test RHR 64", "test rhr folds into rhr")
+check(rows[1].label, "Fatigue", "row fatigue")
+check(rows[1].value, "Fresh", "row fatigue value is the state")
+check(rows[1].icon, Model.ICON.batteryFull, "row fatigue icon full when fresh")
+check(rows[1].tone, "good", "fresh is good")
+check(rows[1].steps, 5, "row fatigue steps")
+check(rows[1].step, 1, "row fatigue step")
+check(rows[2].label, "Balance", "row balance")
+check(rows[3].label, "Today", "row daily load")
+check(rows[3].value, "0", "row daily load zero")
+check(rows[4].label, "7 / 28 day", "rolling load combined")
+check(rows[4].value, "24 · 238", "rolling load values")
+check(rows[5].label, "Acute · chronic", "row acute")
+check(rows[6].label, "Load ratio", "row load ratio")
+check(rows[6].value, "0.16 · Recovering", "row load ratio value")
+check(rows[6].lo, 0.8, "row load ratio lo")
+check(rows[6].hi, 1.3, "row load ratio hi")
+check(rows[6].tone, "neutral", "recovering is rest not alarm")
+check(rows[7].label, "This week", "row week")
+check(rows[7].value, "18", "row week value")
+check(rows[7].lo, 210, "row week lo")
+check(rows[7].tone, "neutral", "under weekly target is rest")
+check(rows[8].icon, Model.ICON.bike, "activity icon from name")
+check(rows[8].value, "Eagle Mountain E-Mountain Bike", "activity name as value")
+check(rows[8].label, "Last activity · Sep 7", "activity day in label")
+check(Model.hrvTone(snap), "good", "hrv in band is good")
+check(Model.hrvTone({ hrv: 18, hrvBandLow: 22, hrvBandHigh: 30 }), "bad", "hrv below band is bad")
+check(Model.hrvTone({ hrv: 33, hrvBandLow: 23, hrvBandHigh: 31, hrvBaseline: 27 }), "good", "hrv above band is good")
+check(Model.weekTone(18, 210, 315), "neutral", "weekTone rest")
+check(Model.weekTone(400, 210, 315), "bad", "weekTone over")
+check(Model.fatigueTone(1), "good", "fatigueTone fresh")
+check(Model.fatigueTone(5), "bad", "fatigueTone fatigued")
+check(Model.heroMood(snap), "rest", "fresh recovering is rest")
+check(Model.heroPhrases(snap).length > 0, true, "rest has snippets")
+check(Model.heroMood({ error: "auth" }), "idle", "auth is idle")
+check(
+  Model.heroMood({ hrv: 18, hrvBandLow: 22, hrvBandHigh: 30, fatigueState: 1, loadState: 1, error: null }),
+  "low",
+  "below-band hrv is low"
+)
+check(
+  Model.heroMood({ hrv: 24, hrvBandLow: 22, hrvBandHigh: 30, fatigueState: 1, loadState: 2, error: null }),
+  "work",
+  "productive load is work"
+)
+check(
+  Model.heroMood({ hrv: 24, hrvBandLow: 22, hrvBandHigh: 30, fatigueState: 5, loadState: 1, error: null }),
+  "strained",
+  "fatigued is strained"
+)
+check(Model.activityIcon("Morning Run"), Model.ICON.activity, "run icon")
+check(Model.activityIcon("Trail Run"), Model.ICON.activity, "trail run is run not hike")
+check(Model.activityIcon("Pool Swim"), Model.ICON.swim, "swim icon")
+check(Model.activityIcon("Open Water Swim"), Model.ICON.swim, "open water swim")
+check(Model.activityIcon("Easy Walk"), Model.ICON.walk, "walk icon")
+check(Model.activityIcon("Lunch Hike"), Model.ICON.hike, "hike icon")
+check(Model.activityIcon("Yoga Flow"), Model.ICON.yoga, "yoga icon")
+check(Model.activityIcon("Downhill Ski"), Model.ICON.ski, "ski icon")
+check(Model.activityIcon("Resort Snowboard"), Model.ICON.snowboard, "snowboard before ski")
+check(Model.activityIcon("Strength"), Model.ICON.lift, "lift icon")
+check(Model.activityIcon("Indoor Cycling"), Model.ICON.bike, "cycling is bike")
+check(Model.activityIcon("Basketball"), Model.ICON.basket, "basket icon")
+check(Model.activityIcon("Pickup Soccer"), Model.ICON.soccer, "soccer icon")
+check(Model.activityIcon("Morning Surf"), Model.ICON.surf, "surf icon")
+check(Model.ICON.swim !== Model.ICON.activity, true, "swim is not the run fallback")
+check(Model.ICON.walk !== Model.ICON.activity, true, "walk is not the run fallback")
+check(Model.hrvRange(snap), { lo: 22, hi: 30, pos: 24, mark: 26 }, "hrvRange")
+check(Model.formatTick(0.16), "0.16", "formatTick ratio")
+check(Model.formatTick(18), "18", "formatTick int")
 check(Model.validBarMetric("ICON"), "icon", "validBarMetric icon")
 check(Model.validBarMetric("nope"), "hrv", "validBarMetric fallback")
 check(Model.formatBar(snap, "icon"), "", "formatBar icon is empty")

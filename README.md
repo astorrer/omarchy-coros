@@ -35,7 +35,10 @@ panel asks you to sign in again.
 - The bar shows one compact metric (`HRV 24`); hover for the rest. Open the
   panel for Training Hub recovery: HRV vs baseline and band, resting HR,
   daily / 7-day / 28-day load, load ratio, weekly target, acute vs chronic,
-  impact balance, fatigue, and last activity.
+  impact balance, fatigue, and last activity. Overnight and load sit
+  three-across; HRV, load ratio, and the weekly target use a range. Accent
+  means in-range / recovered; urgent means below-band HRV or overreaching
+  load.
 - The panel header shows whether you are signed in and which region (US/EU).
   Region is chosen on the sign-in form, not in a second settings row.
 - Missing data shows as blank, never as an error — the helper exits zero and

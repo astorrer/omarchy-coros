@@ -36,20 +36,53 @@ Panel {
   }
 
   readonly property string hrvValue: metricText(snapshot ? snapshot.hrv : null)
+  readonly property string hrvDeltaText: snapshot ? Model.formatDelta(Model.hrvDelta(snapshot.hrv, snapshot.hrvBaseline)) : ""
+  readonly property var hrvBand: snapshot ? Model.hrvRange(snapshot) : null
   readonly property string hrvMeta: {
-    var parts = []
+    var parts = ["Overnight HRV"]
     var day = snapshot ? Model.formatDay(snapshot.day) : ""
     if (day !== "") parts.push(day)
-    parts.push("Overnight HRV")
-    if (snapshot && snapshot.hrvBaseline !== null && snapshot.hrvBaseline !== undefined)
-      parts.push("baseline " + snapshot.hrvBaseline)
-    var delta = snapshot ? Model.hrvDelta(snapshot.hrv, snapshot.hrvBaseline) : null
-    var formatted = Model.formatDelta(delta)
-    if (formatted !== "") parts.push(formatted)
-    if (snapshot && snapshot.hrvBandLow !== null && snapshot.hrvBandLow !== undefined
-        && snapshot.hrvBandHigh !== null && snapshot.hrvBandHigh !== undefined)
-      parts.push(snapshot.hrvBandLow + "–" + snapshot.hrvBandHigh)
     return parts.join(" · ")
+  }
+  readonly property color dim: Qt.darker(barForeground, 1.4)
+  readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property bool showRecovery: !client || client.showRecovery
+  readonly property bool showLoad: !client || client.showLoad
+  readonly property bool showActivity: !client || client.showActivity
+  readonly property string hrvToneName: snapshot ? Model.hrvTone(snapshot) : "neutral"
+  readonly property string heroMood: snapshot ? Model.heroMood(snapshot) : "idle"
+  readonly property var heroPhraseList: snapshot ? Model.heroPhrases(snapshot) : []
+  readonly property bool rotatingPhrases: opened && view === "main" && !showLogin && heroPhraseList.length > 1
+  property int phraseIndex: 0
+  readonly property string heroStatusText: {
+    if (showLogin) return ""
+    if (!snapshot || Model.isEmpty(snapshot)) return "Waiting on metrics"
+    if (heroPhraseList.length === 0) return "Signed in · " + regionText
+    return heroPhraseList[phraseIndex % heroPhraseList.length]
+  }
+  readonly property string hrvRowValue: {
+    var v = hrvValue
+    if (v === "—" || hrvDeltaText === "") return v
+    return v + " · " + hrvDeltaText
+  }
+  readonly property var groups: Model.metricGroups(snapshot, {
+    recovery: showRecovery,
+    load: showLoad,
+    activity: showActivity
+  })
+
+  function toneColor(tone) {
+    if (tone === "good") return Color.accent
+    if (tone === "bad") return Color.urgent
+    return root.barForeground
+  }
+
+  readonly property int metricColumns: 3
+
+  function metricTileWidth(flow) {
+    if (!flow) return 1
+    var gaps = flow.spacing * (root.metricColumns - 1)
+    return Math.max(1, Math.floor((flow.width - gaps) / root.metricColumns))
   }
 
   function metricText(value) {
@@ -107,6 +140,50 @@ Panel {
     return false
   }
 
+  onHeroMoodChanged: phraseIndex = 0
+
+  Timer {
+    id: phraseTimer
+    interval: 2800
+    running: root.rotatingPhrases
+    repeat: true
+    onTriggered: phraseSwap.restart()
+  }
+
+  SequentialAnimation {
+    id: phraseSwap
+    PropertyAnimation {
+      target: hero
+      property: "metaOpacity"
+      to: 0.0
+      duration: 180
+      easing.type: Easing.OutQuad
+    }
+    ScriptAction {
+      script: {
+        var n = root.heroPhraseList.length
+        if (n > 0) root.phraseIndex = (root.phraseIndex + 1) % n
+      }
+    }
+    PropertyAnimation {
+      target: hero
+      property: "metaOpacity"
+      to: 1.0
+      duration: 260
+      easing.type: Easing.InQuad
+    }
+  }
+
+  Connections {
+    target: root
+    function onRotatingPhrasesChanged() {
+      if (!root.rotatingPhrases) {
+        phraseSwap.stop()
+        if (hero) hero.metaOpacity = 1.0
+      }
+    }
+  }
+
   function bumpRefresh(delta) {
     if (!client) return
     client.writeSetting(
@@ -115,30 +192,376 @@ Panel {
     )
   }
 
-  component MetricCell: Column {
-    id: cell
-    property string label: ""
-    property string value: "—"
-    spacing: Style.space(2)
+  component RangeBar: Item {
+    id: rangeBar
+    property var lo: null
+    property var hi: null
+    property var pos: null
+    property var mark: null
+    property string tone: "neutral"
+    readonly property color ink: root.toneColor(tone)
+    readonly property bool ready: {
+      if (lo === null || lo === undefined || hi === null || hi === undefined || pos === null || pos === undefined)
+        return false
+      var a = Number(lo), b = Number(hi), c = Number(pos)
+      return isFinite(a) && isFinite(b) && isFinite(c)
+    }
+    visible: ready
+    width: parent ? parent.width : 0
+    implicitHeight: ready ? ink.height + Style.space(2) + captions.height : 0
+    height: implicitHeight
+    clip: true
 
-    Text {
-      width: parent.width
-      text: cell.label
-      color: root.barForeground
-      opacity: 0.45
-      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-      font.pixelSize: Style.font.caption
+    readonly property real dmin: {
+      if (!ready) return 0
+      var m = Math.min(Number(lo), Number(hi), Number(pos))
+      var k = Number(mark)
+      if (isFinite(k)) m = Math.min(m, k)
+      return m
+    }
+    readonly property real dmax: {
+      if (!ready) return 1
+      var m = Math.max(Number(lo), Number(hi), Number(pos))
+      var k = Number(mark)
+      if (isFinite(k)) m = Math.max(m, k)
+      return m === dmin ? dmin + 1 : m
     }
 
-    Text {
+    readonly property bool bandIsWindow: {
+      if (!ready) return false
+      var span = dmax - dmin
+      if (span <= 0) return false
+      return Math.abs(Number(hi) - Number(lo)) / span < 0.95
+    }
+
+    function xAt(v) {
+      var span = dmax - dmin
+      if (span <= 0 || width <= 0) return 0
+      var t = (Number(v) - dmin) / span
+      if (t < 0) t = 0
+      if (t > 1) t = 1
+      return t * width
+    }
+
+    function clampLabelX(center, labelWidth) {
+      var pos = center - labelWidth / 2
+      if (pos < 0) return 0
+      if (pos + labelWidth > width) return Math.max(0, width - labelWidth)
+      return pos
+    }
+
+    Item {
+      id: ink
       width: parent.width
-      text: cell.value
-      color: root.barForeground
-      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-      font.pixelSize: Style.font.body
-      elide: Text.ElideRight
-      wrapMode: Text.NoWrap
-      textFormat: Text.PlainText
+      height: Style.space(8)
+
+      Rectangle {
+        id: track
+        anchors.fill: parent
+        radius: height / 2
+        color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.12)
+      }
+
+      Rectangle {
+        visible: rangeBar.ready && rangeBar.bandIsWindow
+        x: Math.min(rangeBar.xAt(rangeBar.lo), rangeBar.xAt(rangeBar.hi))
+        width: Math.max(track.height, Math.abs(rangeBar.xAt(rangeBar.hi) - rangeBar.xAt(rangeBar.lo)))
+        anchors.verticalCenter: track.verticalCenter
+        height: track.height
+        radius: height / 2
+        color: Color.accent
+        Behavior on x { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+        Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+        Behavior on color { ColorAnimation { duration: 220 } }
+      }
+
+      Rectangle {
+        visible: rangeBar.ready && isFinite(Number(rangeBar.mark))
+        x: rangeBar.xAt(rangeBar.mark) - 0.5
+        width: 1
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        color: root.barForeground
+        opacity: 0.45
+      }
+
+      Rectangle {
+        id: thumb
+        visible: rangeBar.ready
+        width: Style.space(8)
+        height: Style.space(8)
+        radius: height / 2
+        color: root.barForeground
+        anchors.verticalCenter: track.verticalCenter
+        x: Math.min(Math.max(0, rangeBar.xAt(rangeBar.pos) - width / 2), Math.max(0, parent.width - width))
+        Behavior on x { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+        SequentialAnimation on opacity {
+          running: root.opened && root.view === "main" && rangeBar.tone === "bad"
+          loops: Animation.Infinite
+          alwaysRunToEnd: true
+          NumberAnimation { from: 1.0; to: 0.35; duration: 480; easing.type: Easing.InOutSine }
+          NumberAnimation { from: 0.35; to: 1.0; duration: 480; easing.type: Easing.InOutSine }
+        }
+      }
+    }
+
+    Item {
+      id: captions
+      y: ink.height + Style.space(2)
+      width: parent.width
+      height: Math.max(loLabel.implicitHeight, hiLabel.implicitHeight, combinedLabel.implicitHeight)
+
+      readonly property real loX: rangeBar.clampLabelX(rangeBar.xAt(rangeBar.lo), loLabel.implicitWidth)
+      readonly property real hiX: rangeBar.clampLabelX(rangeBar.xAt(rangeBar.hi), hiLabel.implicitWidth)
+      readonly property bool overlap: loX + loLabel.implicitWidth + Style.space(6) > hiX
+
+      Text {
+        id: loLabel
+        visible: !captions.overlap
+        x: captions.loX
+        text: Model.formatTick(rangeBar.lo)
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        id: hiLabel
+        visible: !captions.overlap
+        x: captions.hiX
+        text: Model.formatTick(rangeBar.hi)
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        id: combinedLabel
+        visible: captions.overlap
+        x: rangeBar.clampLabelX(
+          (rangeBar.xAt(rangeBar.lo) + rangeBar.xAt(rangeBar.hi)) / 2,
+          implicitWidth
+        )
+        text: Model.formatTick(rangeBar.lo) + "–" + Model.formatTick(rangeBar.hi)
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+  }
+
+  component StepMeter: Row {
+    id: meter
+    property int count: 5
+    property int step: 0
+    property string tone: "neutral"
+    property bool live: false
+    visible: count > 0 && step > 0
+    spacing: Style.space(4)
+    readonly property int pulseMs: tone === "bad" ? 420 : 900
+    readonly property real pulseFloor: tone === "bad" ? 0.2 : 0.4
+
+    Repeater {
+      model: meter.count
+      Rectangle {
+        id: dot
+        required property int index
+        readonly property bool activeDot: (index + 1) === meter.step
+        width: Style.space(7)
+        height: Style.space(7)
+        radius: width / 2
+        color: activeDot ? root.toneColor(meter.tone) : root.barForeground
+        opacity: activeDot ? 1.0 : 0.18
+        Behavior on color { ColorAnimation { duration: 220 } }
+
+        SequentialAnimation on opacity {
+          running: meter.live && dot.activeDot
+          loops: Animation.Infinite
+          alwaysRunToEnd: true
+          NumberAnimation { from: 1.0; to: meter.pulseFloor; duration: meter.pulseMs; easing.type: Easing.InOutSine }
+          NumberAnimation { from: meter.pulseFloor; to: 1.0; duration: meter.pulseMs; easing.type: Easing.InOutSine }
+          onRunningChanged: if (!running) dot.opacity = dot.activeDot ? 1.0 : 0.18
+        }
+      }
+    }
+  }
+
+  component MetricTile: Item {
+    id: tile
+    property string icon: ""
+    property string label: ""
+    property string value: "—"
+    property string hint: ""
+    property int steps: 0
+    property int step: 0
+    property string tone: "neutral"
+    property bool marquee: false
+    property bool live: root.opened && root.view === "main" && !root.showLogin
+    readonly property color ink: root.toneColor(tone)
+    readonly property bool heartPulse: icon === Model.ICON.rhr
+    implicitHeight: body.implicitHeight
+    implicitWidth: body.implicitWidth
+
+    Row {
+      id: body
+      width: parent.width
+      spacing: Style.space(8)
+
+      Text {
+        id: iconGlyph
+        width: Style.space(20)
+        text: tile.icon
+        color: tile.ink
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.iconLarge
+        horizontalAlignment: Text.AlignHCenter
+        anchors.verticalCenter: parent.verticalCenter
+        Behavior on color { ColorAnimation { duration: 220 } }
+        transformOrigin: Item.Center
+        SequentialAnimation on scale {
+          running: tile.live && tile.heartPulse
+          loops: Animation.Infinite
+          alwaysRunToEnd: true
+          NumberAnimation { to: 1.18; duration: 90; easing.type: Easing.OutQuad }
+          NumberAnimation { to: 1.0; duration: 90; easing.type: Easing.InQuad }
+          NumberAnimation { to: 1.12; duration: 80; easing.type: Easing.OutQuad }
+          NumberAnimation { to: 1.0; duration: 120; easing.type: Easing.InQuad }
+          PauseAnimation { duration: 720 }
+          onRunningChanged: if (!running) iconGlyph.scale = 1
+        }
+      }
+
+      Column {
+        width: Math.max(0, body.width - Style.space(20) - body.spacing)
+        spacing: Style.space(1)
+
+        Item {
+          id: valueClip
+          width: parent.width
+          height: valueText.implicitHeight
+          clip: tile.marquee
+
+          Text {
+            id: valueText
+            width: tile.marquee ? implicitWidth : valueClip.width
+            textFormat: Text.PlainText
+            text: tile.value
+            color: tile.ink
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.heading
+            font.bold: true
+            elide: tile.marquee ? Text.ElideNone : Text.ElideRight
+            Behavior on color { ColorAnimation { duration: 220 } }
+            readonly property bool needsScroll: tile.marquee && implicitWidth > valueClip.width + 1
+
+            SequentialAnimation {
+              running: valueText.needsScroll && tile.live
+              loops: Animation.Infinite
+              alwaysRunToEnd: true
+              PauseAnimation { duration: 1800 }
+              NumberAnimation {
+                target: valueText
+                property: "x"
+                from: 0
+                to: valueClip.width - valueText.implicitWidth
+                duration: Math.max(4000, Math.round(valueText.implicitWidth * 22))
+                easing.type: Easing.InOutQuad
+              }
+              PauseAnimation { duration: 1000 }
+              NumberAnimation {
+                target: valueText
+                property: "x"
+                to: 0
+                duration: 500
+                easing.type: Easing.InOutQuad
+              }
+              onRunningChanged: if (!running) valueText.x = 0
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          text: tile.label.toUpperCase()
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+          font.letterSpacing: 1.2
+          elide: Text.ElideRight
+        }
+
+        StepMeter {
+          count: tile.steps
+          step: tile.step
+          tone: tile.tone
+          live: tile.live
+        }
+
+        Text {
+          width: parent.width
+          visible: tile.hint !== ""
+          textFormat: Text.PlainText
+          text: tile.hint.toUpperCase()
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+          font.letterSpacing: 1.2
+          elide: Text.ElideRight
+        }
+      }
+    }
+  }
+
+  component RangeRow: Column {
+    id: row
+    property string label: ""
+    property string value: ""
+    property string tone: "neutral"
+    property var lo: null
+    property var hi: null
+    property var pos: null
+    property var mark: null
+    spacing: Style.space(2)
+
+    Row {
+      width: parent.width
+      spacing: Style.space(8)
+
+      Text {
+        width: Math.max(0, parent.width - valueLabel.implicitWidth - parent.spacing)
+        textFormat: Text.PlainText
+        text: row.label.toUpperCase()
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+        font.letterSpacing: 1.2
+        elide: Text.ElideRight
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        id: valueLabel
+        textFormat: Text.PlainText
+        text: row.value
+        color: root.toneColor(row.tone)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+        elide: Text.ElideRight
+      }
+    }
+
+    RangeBar {
+      width: parent.width
+      lo: row.lo
+      hi: row.hi
+      pos: row.pos
+      mark: row.mark
+      tone: row.tone
     }
   }
 
@@ -149,7 +572,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(340))
+    contentWidth: panel.fittedContentWidth(Style.space(480))
     contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(620))
 
     PanelKeyCatcher {
@@ -174,30 +597,22 @@ Panel {
         Column {
           id: content
           width: panelFlick.width
-          spacing: Style.space(12)
+          spacing: Style.space(14)
 
         RowLayout {
+          visible: root.view === "settings" || root.showLogin
           width: parent.width
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             text: root.view === "settings" ? "Settings" : "COROS"
             color: root.barForeground
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.family: root.fontFamily
             font.pixelSize: Style.font.subtitle
             font.bold: true
             elide: Text.ElideRight
             Layout.fillWidth: true
-          }
-
-          Button {
-            visible: root.view === "main" && !root.showLogin
-            text: "Refresh"
-            foreground: root.barForeground
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            onClicked: {
-              if (root.client) root.client.refresh()
-            }
           }
 
           Button {
@@ -212,18 +627,19 @@ Panel {
 
         Text {
           width: parent.width
-          visible: root.statusText !== "" && root.view !== "settings"
+          visible: root.statusText !== "" && root.view !== "settings" && (root.showLogin || Model.isEmpty(root.snapshot) || (root.client && root.client.actionStatus !== ""))
+          textFormat: Text.PlainText
           text: root.statusText
-          color: Model.authError(root.snapshot) && !(root.client && root.client.actionStatus) ? Color.urgent : root.barForeground
-          opacity: Model.authError(root.snapshot) && !(root.client && root.client.actionStatus) ? 1.0 : 0.55
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.body
+          color: Model.authError(root.snapshot) && !(root.client && root.client.actionStatus) ? Color.urgent : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
         }
 
         Column {
           visible: root.showLogin
           width: parent.width
+          height: visible ? implicitHeight : 0
           spacing: Style.space(10)
 
           TextField {
@@ -293,66 +709,164 @@ Panel {
         Column {
           visible: root.view === "main" && !root.showLogin
           width: parent.width
-          spacing: Style.space(12)
+          height: visible ? implicitHeight : 0
+          spacing: Style.space(14)
 
-          Column {
+          Item {
+            id: header
             width: parent.width
-            spacing: Style.space(2)
-
-            Text {
-              width: parent.width
-              visible: !root.client || root.client.showRecovery
-              text: root.hrvValue
-              color: root.barForeground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.title
-              font.bold: true
-              elide: Text.ElideRight
+            implicitHeight: hero.implicitHeight
+            function refreshNow() {
+              if (root.client) root.client.refresh()
             }
 
-            Text {
+            PanelHero {
+              id: hero
               width: parent.width
-              visible: !root.client || root.client.showRecovery
-              text: root.hrvMeta
-              color: root.barForeground
-              opacity: 0.55
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
-          }
-
-          Flickable {
-            width: parent.width
-            height: Math.min(metricsCol.implicitHeight, Style.space(320))
-            contentHeight: metricsCol.implicitHeight
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-
-            Column {
-              id: metricsCol
-              width: parent.width
-              spacing: Style.space(10)
-
-              Repeater {
-                model: Model.metricRows(root.snapshot, {
-                  recovery: !root.client || root.client.showRecovery,
-                  load: !root.client || root.client.showLoad,
-                  activity: !root.client || root.client.showActivity
-                })
-
-                MetricCell {
-                  required property var modelData
-                  width: metricsCol.width
-                  label: modelData.label
-                  value: modelData.value
+              title: "COROS"
+              meta: root.heroStatusText
+              foreground: root.barForeground
+              fontFamily: root.fontFamily
+              iconComponent: Component {
+                CorosIcon {
+                  iconSize: Style.font.display
+                  color: root.barForeground
+                }
+              }
+              trailingControl: Component {
+                PanelActionButton {
+                  iconText: "󰑐"
+                  tooltipText: "Refresh"
+                  foreground: hero.foreground
+                  fontFamily: hero.fontFamily
+                  onClicked: header.refreshNow()
                 }
               }
             }
           }
 
-          PanelSeparator {
+          Column {
+            visible: root.showRecovery && (root.groups.recovery.length > 0 || root.hrvBand)
             width: parent.width
+            spacing: Style.space(6)
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "OVERNIGHT"
+              foreground: root.barForeground
+              fontFamily: root.fontFamily
+              font.letterSpacing: 1.2
+            }
+
+            RangeRow {
+              visible: root.hrvBand !== null
+              width: parent.width
+              label: "HRV"
+              value: root.hrvRowValue
+              tone: root.hrvToneName
+              lo: root.hrvBand ? root.hrvBand.lo : null
+              hi: root.hrvBand ? root.hrvBand.hi : null
+              pos: root.hrvBand ? root.hrvBand.pos : null
+              mark: root.hrvBand ? root.hrvBand.mark : null
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(12)
+
+              Repeater {
+                model: root.groups.recovery
+                MetricTile {
+                  required property var modelData
+                  width: root.metricTileWidth(parent)
+                  icon: modelData.icon
+                  label: modelData.label
+                  value: modelData.value
+                  hint: modelData.hint
+                  steps: modelData.steps
+                  step: modelData.step
+                  tone: modelData.tone
+                }
+              }
+            }
+          }
+
+          Column {
+            visible: root.showLoad && (root.groups.load.length > 0 || root.groups.bars.length > 0)
+            width: parent.width
+            spacing: Style.space(6)
+
+            PanelSeparator {
+              visible: root.showRecovery && root.groups.recovery.length > 0
+              foreground: root.barForeground
+            }
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "LOAD"
+              foreground: root.barForeground
+              fontFamily: root.fontFamily
+              font.letterSpacing: 1.2
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(12)
+
+              Repeater {
+                model: root.groups.load
+                MetricTile {
+                  required property var modelData
+                  width: root.metricTileWidth(parent)
+                  icon: modelData.icon
+                  label: modelData.label
+                  value: modelData.value
+                  hint: modelData.hint
+                  steps: modelData.steps
+                  step: modelData.step
+                  tone: modelData.tone
+                }
+              }
+            }
+
+            Item {
+              visible: root.groups.bars.length > 0
+              width: parent.width
+              height: Style.space(8)
+            }
+
+            Repeater {
+              model: root.groups.bars
+              RangeRow {
+                required property var modelData
+                width: parent.width
+                label: modelData.label
+                value: modelData.value
+                tone: modelData.tone
+                lo: modelData.lo
+                hi: modelData.hi
+                pos: modelData.pos
+                mark: modelData.mark
+              }
+            }
+          }
+
+          Repeater {
+            model: root.groups.activity
+            MetricTile {
+              required property var modelData
+              width: parent.width
+              icon: modelData.icon
+              label: modelData.label
+              value: modelData.value
+              hint: modelData.hint
+              tone: modelData.tone
+              marquee: true
+            }
+          }
+
+          PanelSeparator {
+            foreground: root.barForeground
           }
 
           RowLayout {
@@ -360,11 +874,12 @@ Panel {
             spacing: Style.space(10)
 
             Text {
+              textFormat: Text.PlainText
               text: "COROS " + Model.PLUGIN_VERSION
-              color: root.barForeground
-              opacity: 0.45
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              color: root.dim
+              font.family: root.fontFamily
               font.pixelSize: Style.font.caption
+              font.letterSpacing: 1.2
               elide: Text.ElideRight
               Layout.fillWidth: true
               Layout.alignment: Qt.AlignVCenter
@@ -380,6 +895,7 @@ Panel {
               iconText: "󰒓"
               tooltipText: "Settings"
               foreground: root.barForeground
+              fontFamily: root.fontFamily
               Layout.alignment: Qt.AlignVCenter
               onClicked: root.openSettings()
             }
@@ -389,6 +905,7 @@ Panel {
         Column {
           visible: root.view === "settings"
           width: parent.width
+          height: visible ? implicitHeight : 0
           spacing: Style.space(8)
 
           PanelSectionHeader {

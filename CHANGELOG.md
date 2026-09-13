@@ -32,3 +32,18 @@
   The card grows with the form (capped a little above the usual popup
   height) so the whole page fits without scrolling on a normal bar.
   Back and Refresh in the header are buttons, not ghost labels.
+- Pair each recovery number with a Nerd Font glyph and a range or state
+  meter so HRV, load, and fatigue sit against a band instead of a JSON
+  dump. Overnight and load sit three-across (panel matches weather's
+  width); ratio and weekly target keep the full width. Accent marks
+  in-range / recovered, urgent marks below-band HRV or overreaching load.
+  The hero is the COROS mark and name with rotating status snippets
+  (Dropbox-style), then overnight / load contents. HRV sits in Overnight
+  with its band, not in the title.
+- Last-activity icon follows the workout name: bike, run, walk, hike,
+  swim, surf, yoga, ski, snowboard, lift, soccer, basketball; anything
+  else falls back to run. Trail Run stays a run.
+- Metrics animate with the theme: the resting-HR glyph double-thumps, the
+  fatigue dots breathe (faster when strained), and range fills/thumbs ease
+  like the battery bar. Colors stay on accent / urgent / foreground.
+  Long last-activity names marquee instead of eliding.

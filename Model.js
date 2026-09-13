@@ -87,6 +87,36 @@ function isEmpty(snapshot) {
     && str(snapshot.activity) === null
 }
 
+// Nerd Font glyphs (Material Design). The number is not the point of
+// reference — the icon, the band, and the state dots are.
+var ICON = {
+  hrv: "󰻹",
+  rhr: "󰋑",
+  test: "󰋕",
+  balance: "󰗑",
+  load: "󰄨",
+  ratio: "󰊚",
+  week: "󰄪",
+  acute: "󰄪",
+  activity: "󰜎",
+  bike: "󰂣",
+  swim: "󰘆",
+  walk: "󰖃",
+  hike: "󰵿",
+  yoga: "󱅻",
+  ski: "󱌄",
+  snowboard: "󱌇",
+  lift: "󱅝",
+  surf: "󱝆",
+  soccer: "󰒸",
+  basket: "󰠆",
+  batteryFull: "󰁹",
+  battery80: "󰂂",
+  battery50: "󰁿",
+  battery20: "󰁼",
+  batteryEmpty: "󰂃"
+}
+
 function loadStateLabel(state) {
   var labels = { 1: "Recovering", 2: "Productive", 3: "Maintaining", 4: "Overreaching", 5: "Excessive" }
   return labels[Number(state)] || ""
@@ -97,52 +127,254 @@ function fatigueStateLabel(state) {
   return labels[Number(state)] || ""
 }
 
+function fatigueIcon(state) {
+  var icons = { 1: ICON.batteryFull, 2: ICON.battery80, 3: ICON.battery50, 4: ICON.battery20, 5: ICON.batteryEmpty }
+  return icons[Number(state)] || ICON.battery50
+}
+
+function activityIcon(name) {
+  var s = String(name || "").toLowerCase()
+  if (/snowboard/.test(s)) return ICON.snowboard
+  if (/ski|snowshoe/.test(s)) return ICON.ski
+  if (/yoga|pilates|stretch/.test(s)) return ICON.yoga
+  if (/strength|weight|gym|lift|cross.?train/.test(s)) return ICON.lift
+  if (/surf|kite.?surf/.test(s)) return ICON.surf
+  if (/swim|pool|aqua/.test(s)) return ICON.swim
+  if (/run|jog|treadmill/.test(s)) return ICON.activity
+  if (/hike|backpack/.test(s)) return ICON.hike
+  if (/walk/.test(s)) return ICON.walk
+  if (/basket/.test(s)) return ICON.basket
+  if (/soccer|football/.test(s)) return ICON.soccer
+  if (/e-?mountain|e-?bike|gravel|cycl|bike|ride/.test(s)) return ICON.bike
+  return ICON.activity
+}
+
 function withState(value, label) {
   if (value === null || value === undefined || value === "") return ""
   return label ? String(value) + " · " + label : String(value)
 }
 
-function metricRows(snapshot, groups) {
-  if (!signedIn(snapshot)) return []
-  var recovery = !groups || groups.recovery !== false
-  var load = !groups || groups.load !== false
+function formatTick(value) {
+  var n = num(value)
+  if (n === null) return ""
+  if (Math.abs(n - Math.round(n)) < 0.005) return String(Math.round(n))
+  return n.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")
+}
+
+function hrvRange(snapshot) {
+  if (!snapshot) return null
+  var lo = num(snapshot.hrvBandLow)
+  var hi = num(snapshot.hrvBandHigh)
+  var pos = num(snapshot.hrv)
+  if (lo === null || hi === null || pos === null) return null
+  return { lo: lo, hi: hi, pos: pos, mark: num(snapshot.hrvBaseline) }
+}
+
+function hrvTone(snapshot) {
+  var r = hrvRange(snapshot)
+  if (!r) return "neutral"
+  if (r.pos < r.lo) return "bad"
+  return "good"
+}
+
+function fatigueTone(state) {
+  var s = Number(state)
+  if (!isFinite(s) || s <= 0) return "neutral"
+  if (s <= 2) return "good"
+  if (s >= 4) return "bad"
+  return "neutral"
+}
+
+function loadTone(state) {
+  var s = Number(state)
+  if (s >= 4) return "bad"
+  if (s === 2 || s === 3) return "good"
+  return "neutral"
+}
+
+function weekTone(pos, lo, hi) {
+  var p = num(pos), a = num(lo), b = num(hi)
+  if (p === null || a === null || b === null) return "neutral"
+  if (p > Math.max(a, b)) return "bad"
+  if (p < Math.min(a, b)) return "neutral"
+  return "good"
+}
+
+var HERO_PHRASES = {
+  rest: [
+    "Banking recovery",
+    "Sleeping it off",
+    "Resting easy",
+    "Storing spark",
+    "Hoarding heartbeats",
+    "Coiling the spring"
+  ],
+  work: [
+    "Putting in work",
+    "Stacking strain",
+    "Building the base",
+    "Earning the miles",
+    "Laying down load"
+  ],
+  strained: [
+    "Digging deep",
+    "Burning the match",
+    "Running on fumes",
+    "In the red",
+    "Paying it back"
+  ],
+  low: [
+    "Chasing the band",
+    "Heart running quiet",
+    "Need a night",
+    "Pulse under par"
+  ]
+}
+
+function heroMood(snapshot) {
+  if (!signedIn(snapshot) || isEmpty(snapshot)) return "idle"
+  var fat = num(snapshot.fatigueState)
+  var load = num(snapshot.loadState)
+  if (fat >= 4 || load >= 4) return "strained"
+  if (hrvTone(snapshot) === "bad") return "low"
+  if (load === 2 || load === 3) return "work"
+  return "rest"
+}
+
+function heroPhrases(snapshot) {
+  return HERO_PHRASES[heroMood(snapshot)] || []
+}
+
+function metricRow(spec) {
+  var value = spec.value
+  if (value === null || value === undefined || value === "") return null
+  return {
+    id: spec.id || "",
+    icon: spec.icon || "",
+    label: spec.label,
+    value: String(value),
+    hint: spec.hint || "",
+    lo: spec.lo !== undefined ? spec.lo : null,
+    hi: spec.hi !== undefined ? spec.hi : null,
+    pos: spec.pos !== undefined ? spec.pos : null,
+    mark: spec.mark !== undefined ? spec.mark : null,
+    steps: spec.steps || 0,
+    step: spec.step || 0,
+    tone: spec.tone || "neutral"
+  }
+}
+
+function metricGroups(snapshot, groups) {
+  var empty = { recovery: [], load: [], bars: [], activity: [] }
+  if (!signedIn(snapshot)) return empty
+  var recoveryOn = !groups || groups.recovery !== false
+  var loadOn = !groups || groups.load !== false
   var activityOn = !groups || groups.activity !== false
-  var rows = []
-  function add(label, value) {
-    if (value === null || value === undefined || value === "") return
-    rows.push({ label: label, value: String(value) })
+  var out = { recovery: [], load: [], bars: [], activity: [] }
+  function add(list, spec) {
+    var row = metricRow(spec)
+    if (row) list.push(row)
   }
-  if (recovery) {
-    add("Resting HR", snapshot.rhr)
+  if (recoveryOn) {
+    var rhrHint = ""
     if (num(snapshot.testRhr) !== null && num(snapshot.testRhr) !== num(snapshot.rhr))
-      add("Test RHR", snapshot.testRhr)
-    add("Impact balance", snapshot.balance)
-    add("Fatigue", withState(snapshot.fatigue, fatigueStateLabel(snapshot.fatigueState)))
+      rhrHint = "test RHR " + snapshot.testRhr
+    add(out.recovery, {
+      id: "rhr",
+      icon: ICON.rhr,
+      label: "Resting HR",
+      value: snapshot.rhr,
+      hint: rhrHint
+    })
+    var fatLabel = fatigueStateLabel(snapshot.fatigueState)
+    add(out.recovery, {
+      id: "fatigue",
+      icon: fatigueIcon(snapshot.fatigueState),
+      label: "Fatigue",
+      value: fatLabel || snapshot.fatigue,
+      steps: 5,
+      step: num(snapshot.fatigueState) || 0,
+      tone: fatigueTone(snapshot.fatigueState)
+    })
+    add(out.recovery, {
+      id: "balance",
+      icon: ICON.balance,
+      label: "Balance",
+      value: snapshot.balance
+    })
   }
-  if (load) {
-    add("Daily load", snapshot.load)
-    add("7-day load", snapshot.load7d)
-    add("28-day load", snapshot.load28d)
+  if (loadOn) {
+    add(out.load, {
+      id: "load",
+      icon: ICON.load,
+      label: "Today",
+      value: snapshot.load
+    })
+    var d7 = num(snapshot.load7d)
+    var d28 = num(snapshot.load28d)
+    if (d7 !== null && d28 !== null)
+      add(out.load, {
+        id: "rolling",
+        icon: ICON.week,
+        label: "7 / 28 day",
+        value: d7 + " · " + d28
+      })
+    else if (d7 !== null)
+      add(out.load, { id: "load7d", icon: ICON.week, label: "7-day", value: d7 })
+    else if (d28 !== null)
+      add(out.load, { id: "load28d", icon: ICON.week, label: "28-day", value: d28 })
+    if (num(snapshot.ati) !== null && num(snapshot.cti) !== null)
+      add(out.load, {
+        id: "acute",
+        icon: ICON.acute,
+        label: "Acute · chronic",
+        value: snapshot.ati + " / " + snapshot.cti
+      })
     var ratio = num(snapshot.loadRatio)
-    add("Load ratio", withState(ratio === null ? "" : ratio.toFixed(2), loadStateLabel(snapshot.loadState)))
+    var ratioLabel = loadStateLabel(snapshot.loadState)
+    add(out.bars, {
+      id: "ratio",
+      icon: ICON.ratio,
+      label: "Load ratio",
+      value: withState(ratio === null ? "" : ratio.toFixed(2), ratioLabel),
+      lo: ratio === null ? null : 0.8,
+      hi: ratio === null ? null : 1.3,
+      pos: ratio,
+      mark: ratio === null ? null : 1,
+      tone: loadTone(snapshot.loadState)
+    })
     var week = num(snapshot.loadWeek)
     if (week !== null) {
-      var rec = ""
-      if (num(snapshot.loadWeekMin) !== null && num(snapshot.loadWeekMax) !== null)
-        rec = " · rec " + snapshot.loadWeekMin + "–" + snapshot.loadWeekMax
-      add("This week", week + rec)
+      add(out.bars, {
+        id: "week",
+        icon: ICON.week,
+        label: "This week",
+        value: week,
+        lo: num(snapshot.loadWeekMin),
+        hi: num(snapshot.loadWeekMax),
+        pos: week,
+        tone: weekTone(week, snapshot.loadWeekMin, snapshot.loadWeekMax)
+      })
     }
-    if (num(snapshot.ati) !== null && num(snapshot.cti) !== null)
-      add("Acute / chronic", snapshot.ati + " / " + snapshot.cti)
   }
   if (activityOn) {
     var activity = str(snapshot.activity)
     if (activity) {
       var activityDay = formatDay(snapshot.activityDay)
-      add("Last activity", activityDay ? activity + " · " + activityDay : activity)
+      add(out.activity, {
+        id: "activity",
+        icon: activityIcon(activity),
+        label: activityDay ? "Last activity · " + activityDay : "Last activity",
+        value: activity
+      })
     }
   }
-  return rows
+  return out
+}
+
+function metricRows(snapshot, groups) {
+  var g = metricGroups(snapshot, groups)
+  return g.recovery.concat(g.load, g.bars, g.activity)
 }
 
 function validBarMetric(value) {
