@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-09-12
 
 - Initial scaffold: `manifest.json`, `setup.sh`, `tests/run`, CI, docs.
   `coros.py` (feat/api-client) and the QML UI (feat/ui) to follow.
