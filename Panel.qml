@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import qs.Commons
@@ -14,6 +15,7 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
   property string view: "main"
+  property string loginReturn: "main"
   property string draftEmail: ""
   property string draftPassword: ""
   property string draftRegion: "eu"
@@ -65,18 +67,24 @@ Panel {
   }
 
   function goBack() {
-    if (root.view === "settings" || root.view === "login") {
-      root.view = "main"
-    } else {
-      root.close()
+    if (root.view === "login") {
+      root.view = root.loginReturn
+      return
     }
+    if (root.view === "settings") {
+      root.view = "main"
+      return
+    }
+    root.close()
   }
 
   function openSettings() {
     root.view = "settings"
+    if (panelFlick) panelFlick.contentY = 0
   }
 
   function openLogin() {
+    root.loginReturn = root.view === "settings" ? "settings" : "main"
     draftRegion = client && client.region === "us" ? "us" : "eu"
     draftPassword = ""
     root.view = "login"
@@ -142,7 +150,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(560))
+    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(620))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -152,17 +160,28 @@ Panel {
         root.switchPanel(direction)
       }
 
-      Column {
-        id: content
-        width: parent.width
-        spacing: Style.space(12)
+      Flickable {
+        id: panelFlick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: content.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+        Column {
+          id: content
+          width: panelFlick.width
+          spacing: Style.space(12)
 
         RowLayout {
           width: parent.width
           spacing: Style.space(8)
 
           Text {
-            text: "COROS"
+            text: root.view === "settings" ? "Settings" : "COROS"
             color: root.barForeground
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.subtitle
@@ -171,29 +190,29 @@ Panel {
             Layout.fillWidth: true
           }
 
-          Text {
-            visible: !root.showLogin
+          Button {
+            visible: root.view === "main" && !root.showLogin
             text: "Refresh"
-            color: root.barForeground
-            opacity: 0.65
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.body
+            foreground: root.barForeground
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-
-            MouseArea {
-              anchors.fill: parent
-              anchors.margins: -Style.space(4)
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                if (root.client) root.client.refresh()
-              }
+            onClicked: {
+              if (root.client) root.client.refresh()
             }
+          }
+
+          Button {
+            visible: root.view === "settings"
+            text: "Back"
+            foreground: root.barForeground
+            bordered: true
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            onClicked: root.goBack()
           }
         }
 
         Text {
           width: parent.width
-          visible: root.statusText !== ""
+          visible: root.statusText !== "" && root.view !== "settings"
           text: root.statusText
           color: Model.authError(root.snapshot) && !(root.client && root.client.actionStatus) ? Color.urgent : root.barForeground
           opacity: Model.authError(root.snapshot) && !(root.client && root.client.actionStatus) ? 1.0 : 0.55
@@ -370,62 +389,37 @@ Panel {
         Column {
           visible: root.view === "settings"
           width: parent.width
-          spacing: Style.space(10)
+          spacing: Style.space(8)
 
-          Item {
+          PanelSectionHeader {
             width: parent.width
-            height: Math.max(settingsHeader.implicitHeight, backLabel.implicitHeight)
-
-            PanelSectionHeader {
-              id: settingsHeader
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              text: "SETTINGS"
-              foreground: root.barForeground
-              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-            }
-
-            Text {
-              id: backLabel
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              text: "Back"
-              color: root.barForeground
-              opacity: 0.65
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-
-              MouseArea {
-                anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.goBack()
-              }
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: "Account · " + root.regionText
-            color: root.barForeground
-            opacity: 0.55
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.body
-            wrapMode: Text.WordWrap
-          }
-
-          Button {
-            width: parent.width
-            text: "Change account"
+            text: "BAR"
             foreground: root.barForeground
-            bordered: true
-            onClicked: root.openLogin()
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          }
+
+          ButtonGroup {
+            width: parent.width
+            options: [
+              { value: "icon", label: "Icon" },
+              { value: "hrv", label: "HRV" },
+              { value: "rhr", label: "RHR" },
+              { value: "load", label: "Load" },
+              { value: "fatigue", label: "Fatigue" }
+            ]
+            value: root.client ? root.client.barMetric : "hrv"
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            focusable: false
+            onChanged: function(value) {
+              if (root.client) root.client.writeSetting("barMetric", value)
+            }
           }
 
           Toggle {
             width: parent.width
             label: "Hide when no data"
-            description: "Remove COROS from the bar until metrics arrive."
+            description: "Leave the bar until metrics arrive."
             checked: root.client ? root.client.hideWhenNoData : false
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
@@ -434,6 +428,34 @@ Panel {
               if (root.client) {
                 root.client.writeSetting("hideWhenNoData", !root.client.hideWhenNoData)
               }
+            }
+          }
+
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Text {
+              text: Model.formatRefreshLabel(root.client ? root.client.refreshIntervalMin : Model.REFRESH_DEFAULT_MINUTES)
+              color: root.barForeground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.body
+              Layout.fillWidth: true
+              elide: Text.ElideRight
+            }
+
+            PanelActionButton {
+              iconText: "−"
+              tooltipText: "Faster"
+              foreground: root.barForeground
+              onClicked: root.bumpRefresh(-1)
+            }
+
+            PanelActionButton {
+              iconText: "+"
+              tooltipText: "Slower"
+              foreground: root.barForeground
+              onClicked: root.bumpRefresh(1)
             }
           }
 
@@ -447,7 +469,7 @@ Panel {
           Toggle {
             width: parent.width
             label: "Overnight"
-            description: "HRV, resting HR, balance, and fatigue."
+            description: "HRV, RHR, balance, and fatigue."
             checked: root.client ? root.client.showRecovery : true
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
@@ -483,62 +505,33 @@ Panel {
             }
           }
 
-          Text {
+          PanelSectionHeader {
             width: parent.width
-            text: "Bar"
-            color: root.barForeground
-            opacity: 0.45
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-          }
-
-          ButtonGroup {
-            width: parent.width
-            options: [
-              { value: "icon", label: "Icon" },
-              { value: "hrv", label: "HRV" },
-              { value: "rhr", label: "RHR" },
-              { value: "load", label: "Load" },
-              { value: "fatigue", label: "Fatigue" }
-            ]
-            value: root.client ? root.client.barMetric : "hrv"
+            text: "ACCOUNT"
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-            focusable: false
-            onChanged: function(value) {
-              if (root.client) root.client.writeSetting("barMetric", value)
-            }
           }
 
-          RowLayout {
+          Text {
             width: parent.width
-            spacing: Style.space(8)
+            text: "Signed in · " + root.regionText
+            color: root.barForeground
+            opacity: 0.55
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
+          }
 
-            Text {
-              text: Model.formatRefreshLabel(root.client ? root.client.refreshIntervalMin : Model.REFRESH_DEFAULT_MINUTES)
-              color: root.barForeground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              Layout.fillWidth: true
-              elide: Text.ElideRight
-            }
-
-            PanelActionButton {
-              iconText: "−"
-              tooltipText: "Faster"
-              foreground: root.barForeground
-              onClicked: root.bumpRefresh(-1)
-            }
-
-            PanelActionButton {
-              iconText: "+"
-              tooltipText: "Slower"
-              foreground: root.barForeground
-              onClicked: root.bumpRefresh(1)
-            }
+          Button {
+            width: parent.width
+            text: "Change account"
+            foreground: root.barForeground
+            bordered: true
+            onClicked: root.openLogin()
           }
         }
       }
+    }
     }
   }
 }

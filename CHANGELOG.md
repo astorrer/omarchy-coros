@@ -26,3 +26,9 @@
 - Size the bar's open-panel underline a bit longer than the default dash
   and keep it centered under the COROS mark. Text mode uses the caption
   width.
+- Scroll the settings view so controls stay inside the panel. Settings
+  uses one header (Settings / Back), groups Bar then Panel then Account,
+  and puts the bar display, hide-when-empty, and refresh interval first.
+  The card grows with the form (capped a little above the usual popup
+  height) so the whole page fits without scrolling on a normal bar.
+  Back and Refresh in the header are buttons, not ghost labels.

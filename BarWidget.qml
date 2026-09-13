@@ -211,6 +211,10 @@ BarWidget {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.togglePanel() }
+    function settings(): void {
+      root.open()
+      if (panelLoader.item && panelLoader.item.openSettings) panelLoader.item.openSettings()
+    }
   }
 
   Loader {
