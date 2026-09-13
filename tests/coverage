@@ -14,18 +14,18 @@ set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 1
 
-COVERAGE=${COVERAGE:-python3 -m coverage}
+read -r -a coverage_cmd <<< "${COVERAGE:-python3 -m coverage}"
 : "${COV_COROS_LINES:=98}"
 : "${COV_MODEL_BYTES:=98}"
 
 fail=0
 
 echo "==> coros.py coverage"
-"$COVERAGE" erase
-"$COVERAGE" run --branch --include=coros.py tests/test_coros.py >/dev/null 2>&1
-COROS_LINES=$("$COVERAGE" report --include=coros.py | awk '/coros.py/{gsub("%","",$6); print $6}')
+"${coverage_cmd[@]}" erase
+"${coverage_cmd[@]}" run --branch --include=coros.py tests/test_coros.py >/dev/null 2>&1
+COROS_LINES=$("${coverage_cmd[@]}" report --include=coros.py | awk '/coros.py/{gsub("%","",$6); print $6}')
 echo "coros.py line coverage: ${COROS_LINES}%"
-"$COVERAGE" report --include=coros.py -m
+"${coverage_cmd[@]}" report --include=coros.py -m
 
 echo
 echo "==> Model.js coverage"
