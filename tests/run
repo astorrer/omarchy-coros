@@ -64,24 +64,41 @@ schema = bar_widget.get("schema") or []
 schema_keys = [item.get("key") for item in schema]
 check(sorted(schema_keys) == sorted(defaults), "schema keys must match defaults keys")
 check(
-    sorted(schema_keys) == ["hideWhenNoData", "refreshIntervalSec", "region"],
-    "schema keys must be refreshIntervalSec, region, hideWhenNoData",
+    sorted(schema_keys)
+    == [
+        "barMetric",
+        "hideWhenNoData",
+        "refreshIntervalMin",
+        "region",
+        "showActivity",
+        "showLoad",
+        "showRecovery",
+    ],
+    "schema keys must stay in sync with the QML settings",
 )
 for item in schema:
     check("type" in item and "label" in item, f"schema entry {item.get('key')} needs type and label")
     check(item["key"] in defaults, f"schema key {item['key']} missing from defaults")
 
 by_key = {item["key"]: item for item in schema}
-refresh = by_key["refreshIntervalSec"]
-check(refresh["type"] == "integer", "refreshIntervalSec must be integer")
-check(refresh.get("min") == 5 and refresh.get("max") == 120, "refreshIntervalSec must span 5-120")
-check(refresh.get("defaultValue") == 30 and defaults["refreshIntervalSec"] == 30, "refreshIntervalSec default must be 30")
+refresh = by_key["refreshIntervalMin"]
+check(refresh["type"] == "integer", "refreshIntervalMin must be integer")
+check(refresh.get("min") == 15 and refresh.get("max") == 1440, "refreshIntervalMin must span 15-1440")
+check(refresh.get("step") == 15, "refreshIntervalMin step must be 15")
+check(refresh.get("defaultValue") == 30 and defaults["refreshIntervalMin"] == 30, "refreshIntervalMin default must be 30")
 region = by_key["region"]
 check(region["type"] == "string", "region must be string")
 check(region.get("defaultValue") == "eu" and defaults["region"] == "eu", "region default must be eu")
 hide = by_key["hideWhenNoData"]
 check(hide["type"] == "boolean", "hideWhenNoData must be boolean")
 check(hide.get("defaultValue") is False and defaults["hideWhenNoData"] is False, "hideWhenNoData default must be false")
+for key in ("showRecovery", "showLoad", "showActivity"):
+    item = by_key[key]
+    check(item["type"] == "boolean", f"{key} must be boolean")
+    check(item.get("defaultValue") is True and defaults[key] is True, f"{key} default must be true")
+bar_metric = by_key["barMetric"]
+check(bar_metric["type"] == "string", "barMetric must be string")
+check(bar_metric.get("defaultValue") == "hrv" and defaults["barMetric"] == "hrv", "barMetric default must be hrv")
 
 # Every settings key must be read somewhere in the QML.
 if (ROOT / "BarWidget.qml").is_file():
@@ -103,6 +120,14 @@ check('PROJECT_URL = "https://github.com/astorrer/omarchy-coros"' in model_js, "
 
 print("manifest ok")
 EOF
+
+if [[ -f tests/test_model.js ]]; then
+  if command -v node >/dev/null 2>&1; then
+    run "model" node tests/test_model.js
+  else
+    echo "skip model (node not on PATH)"
+  fi
+fi
 
 if [[ -f tests/test_coros.py ]]; then
   run "coros" python3 tests/test_coros.py
@@ -143,7 +168,7 @@ fi
 OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 QMLLINT=$(command -v qmllint || echo /usr/lib/qt6/bin/qmllint)
 QML_FILES=""
-for f in BarWidget.qml Panel.qml Model.js; do
+for f in BarWidget.qml Panel.qml Model.js CorosIcon.qml; do
   [[ -f $f ]] && QML_FILES="$QML_FILES $f"
 done
 if [[ -n $QML_FILES ]] && [[ -x $QMLLINT ]] && [[ -d $OMARCHY_PATH/shell ]]; then

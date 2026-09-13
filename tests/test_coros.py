@@ -18,8 +18,8 @@ _SPEC = importlib.util.spec_from_file_location("coros", _COROS_PATH)
 coros = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(coros)
 
-EXPECTED_KEYS = ["hrv", "hrvBaseline", "rhr", "load", "sleepH", "activity", "error"]
-NULLS = {key: None for key in EXPECTED_KEYS}
+EXPECTED_KEYS = list(coros.NULL_SNAPSHOT)
+NULLS = dict(coros.NULL_SNAPSHOT)
 
 
 class FakeResponse:
@@ -60,24 +60,82 @@ class FakeHttp:
         raise AssertionError("unexpected url: " + url)
 
 
-def login_payload(token="tok", user_id=7):
-    return {"result": 0, "data": {"accessToken": token, "userId": user_id}}
+def login_payload(token="tok", user_id=7, region_id=None, result=0):
+    data = {"accessToken": token, "userId": user_id}
+    if region_id is not None:
+        data["regionId"] = region_id
+    return {"result": result, "data": data}
 
 
 def day_payload(**fields):
     entry = {
+        "happenDay": 20260910,
         "avgSleepHrv": 42,
         "sleepHrvBase": 45,
+        "sleepHrvIntervalList": [5, 17, 22, 30],
         "rhr": 48,
+        "testRhr": 51,
         "trainingLoad": 85,
-        "tib": 432,
+        "trainingLoadRatio": 0.8,
+        "trainingLoadRatioState": 2,
+        "t7d": 200,
+        "t28d": 800,
+        "ati": 40.0,
+        "cti": 50.0,
+        "tib": 10.0,
+        "tiredRateNew": -5.0,
+        "tiredRateStateNew": 2,
+        "recomendTlMin": 210,
+        "recomendTlMax": 315,
     }
     entry.update(fields)
-    return {"result": 0, "data": {"dayList": [entry]}}
+    return {
+        "result": 0,
+        "data": {
+            "dayList": [entry],
+            "weekList": [{"trainingLoad": 120, "recomendTlMin": 210, "recomendTlMax": 315}],
+        },
+    }
 
 
-def activity_payload(name="Run 10k"):
-    return {"result": 0, "data": {"dataList": [{"name": name}]}}
+def default_snapshot(**over):
+    row = dict(NULLS)
+    row.update(
+        {
+            "hrv": 42,
+            "hrvBaseline": 45,
+            "hrvBandLow": 22,
+            "hrvBandHigh": 30,
+            "rhr": 48,
+            "testRhr": 51,
+            "load": 85,
+            "load7d": 200,
+            "load28d": 800,
+            "loadRatio": 0.8,
+            "loadState": 2,
+            "loadWeek": 120,
+            "loadWeekMin": 210,
+            "loadWeekMax": 315,
+            "ati": 40.0,
+            "cti": 50.0,
+            "balance": 10.0,
+            "fatigue": -5.0,
+            "fatigueState": 2,
+            "activity": "Run 10k",
+            "activityDay": "2026-09-07",
+            "day": "2026-09-10",
+            "error": None,
+        }
+    )
+    row.update(over)
+    return row
+
+
+def activity_payload(name="Run 10k", date=20260907):
+    item = {"name": name}
+    if date is not None:
+        item["date"] = date
+    return {"result": 0, "data": {"dataList": [item]}}
 
 
 def full_routes():
@@ -132,10 +190,7 @@ class CorosTest(unittest.TestCase):
         self.fake(full_routes())
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
-        self.assertEqual(
-            json.loads(out),
-            {"hrv": 42, "hrvBaseline": 45, "rhr": 48, "load": 85, "sleepH": 7.2, "activity": "Run 10k", "error": None},
-        )
+        self.assertEqual(json.loads(out), default_snapshot())
         path, entry = self.token_cache()
         self.assertEqual(entry["access_token"], "tok")
         self.assertEqual(entry["user_id"], 7)
@@ -257,6 +312,106 @@ class CorosTest(unittest.TestCase):
         self.assertEqual(json.loads(out)["error"], "auth")
         self.assertEqual(http2.calls, [])
 
+    def test_snapshot_uses_latest_day_with_recovery_metrics(self):
+        payload = {
+            "result": 0,
+            "data": {
+                "dayList": [
+                    {
+                        "happenDay": 20260907,
+                        "avgSleepHrv": 26,
+                        "sleepHrvBase": 27,
+                        "rhr": 67,
+                        "trainingLoad": 18,
+                        "tib": 432,
+                    },
+                    {
+                        "happenDay": 20260910,
+                        "avgSleepHrv": 24,
+                        "sleepHrvBase": 26,
+                        "rhr": 61,
+                        "trainingLoad": 0,
+                        "tib": 450,
+                    },
+                    {"happenDay": 20260912, "trainingLoad": 0, "tib": 26.0},
+                ]
+            },
+        }
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", [payload]),
+                ("activity/query", [activity_payload()]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out),
+            default_snapshot(
+                hrv=24,
+                hrvBaseline=26,
+                hrvBandLow=None,
+                hrvBandHigh=None,
+                rhr=61,
+                testRhr=None,
+                load=0,
+                load7d=None,
+                load28d=None,
+                loadRatio=None,
+                loadState=None,
+                loadWeek=None,
+                loadWeekMin=None,
+                loadWeekMax=None,
+                ati=None,
+                cti=None,
+                balance=450,
+                fatigue=None,
+                fatigueState=None,
+            ),
+        )
+
+    def test_last_activity_picks_newest(self):
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", [day_payload()]),
+                (
+                    "activity/query",
+                    [
+                        {
+                            "result": 0,
+                            "data": {
+                                "dataList": [
+                                    {"name": "Old Ride", "date": 20260906, "startTime": 1},
+                                    {"name": "New Ride", "date": 20260907, "startTime": 2},
+                                ]
+                            },
+                        }
+                    ],
+                ),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        snap = json.loads(out)
+        self.assertEqual(snap["activity"], "New Ride")
+        self.assertEqual(snap["activityDay"], "2026-09-07")
+
+    def test_tib_is_impact_balance_not_sleep(self):
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", [day_payload(tib=25.0)]),
+                ("activity/query", [activity_payload()]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        snap = json.loads(out)
+        self.assertEqual(snap["balance"], 25.0)
+        self.assertNotIn("sleepH", snap)
+
     def test_nulls_on_empty(self):
         self.fake(
             [
@@ -287,7 +442,7 @@ class CorosTest(unittest.TestCase):
         self.assertIn("COROS_", err)
 
     def test_watch_streams_ndjson(self):
-        line = {"hrv": 42, "hrvBaseline": 45, "rhr": 48, "load": 85, "sleepH": 7.2, "activity": "Run"}
+        line = default_snapshot(activity="Run")
         with (
             unittest.mock.patch.object(coros, "get_snapshot", return_value=dict(line)),
             unittest.mock.patch("time.sleep", side_effect=[None, KeyboardInterrupt]),
@@ -320,6 +475,80 @@ class CorosTest(unittest.TestCase):
         code, out, _ = self.run_cli(["login"], stdin_text="{}")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["error"], "auth")
+
+    def test_login_one_json_line_does_not_read_rest_of_stdin(self):
+        class LineStdin:
+            def readline(self):
+                return json.dumps({"email": "user@example.com", "password": "secret", "region": "eu"}) + "\n"
+
+            def read(self, *args):
+                raise AssertionError("login must not wait for EOF after one JSON line")
+
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            self.fake(
+                [
+                    ("teameuapi.coros.com/account/login", [login_payload("us-tok", region_id=1)]),
+                    ("dayDetail", [day_payload()]),
+                    ("activity/query", [activity_payload()]),
+                ]
+            )
+            out = io.StringIO()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), unittest.mock.patch.object(sys, "stdin", LineStdin()):
+                code = coros.main(["login"])
+        self.assertEqual(code, 0)
+        self.assertIsNone(json.loads(out.getvalue())["error"])
+        _, entry = self.token_cache()
+        self.assertEqual(entry["region"], "us")
+        cred_path = os.path.join(self.tmp.name, "omarchy-coros", "credentials")
+        with open(cred_path) as handle:
+            self.assertIn("COROS_REGION=us", handle.read())
+
+    def test_login_result_0000_string_is_success(self):
+        self.fake(
+            [
+                ("account/login", [login_payload(result="0000")]),
+                ("dayDetail", [day_payload()]),
+                ("activity/query", [activity_payload()]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+
+    def test_region_id_from_eu_login_routes_to_us(self):
+        http = self.fake(
+            [
+                ("teameuapi.coros.com/account/login", [login_payload("us-tok", region_id=1)]),
+                ("dayDetail", [day_payload()]),
+                ("activity/query", [activity_payload()]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot", "--region", "eu"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+        day_calls = [url for url in http.calls if "dayDetail" in url]
+        self.assertEqual(len(day_calls), 1)
+        self.assertIn("teamapi.coros.com", day_calls[0])
+        self.assertNotIn("teameuapi", day_calls[0])
+        _, entry = self.token_cache()
+        self.assertEqual(entry["region"], "us")
+        self.assertEqual(entry["access_token"], "us-tok")
+
+    def test_region_id_3_stays_on_eu(self):
+        http = self.fake(
+            [
+                ("teamapi.coros.com/account/login", [login_payload("eu-tok", region_id=3)]),
+                ("dayDetail", [day_payload()]),
+                ("activity/query", [activity_payload()]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot", "--region", "us"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+        self.assertIn("teameuapi.coros.com", [url for url in http.calls if "dayDetail" in url][0])
+        _, entry = self.token_cache()
+        self.assertEqual(entry["region"], "eu")
 
 
 if __name__ == "__main__":

@@ -50,12 +50,14 @@ mocked HTTP only — no network, ever.
   never print a password. `uninstall` must only remove files this plugin
   wrote (dev symlink, credentials file, token cache).
 - Settings keys in `manifest.json` `barWidget.schema` must stay in sync with
-  the QML that reads them (`refreshIntervalSec`, `region`,
-  `hideWhenNoData`).
-- `coros.py snapshot` prints `{"hrv":42,"hrvBaseline":45,"rhr":48,"load":85,
-  "sleepH":7.2,"activity":"Run 10k","error":null}`. Metrics are null when
-  missing; `error` is null, "auth" (bad/missing login — widget shows the
-  setup hint, polls back off for an hour), or "network". Never a non-zero
-  exit for display. Credentials: env wins, credentials file is the fallback.
-  QML polls `coros.py snapshot` and honors `refreshIntervalSec` /
+  the QML that reads them (`refreshIntervalMin`, `region`,
+  `hideWhenNoData`, `showRecovery`, `showLoad`, `showActivity`, `barMetric`).
+- `coros.py snapshot` prints one JSON object from Training Hub `dayDetail`
+  plus last activity. Metrics are null when missing. Keys: hrv, hrvBaseline,
+  hrvBandLow, hrvBandHigh, rhr, testRhr, load, load7d, load28d, loadRatio,
+  loadState, loadWeek, loadWeekMin, loadWeekMax, ati, cti, balance, fatigue,
+  fatigueState, activity, activityDay, day, error. `tib` is impact balance,
+  not sleep. `error` is null, "auth", or "network". Never a non-zero exit
+  for display. Credentials: env wins, credentials file is the fallback.
+  QML polls `coros.py snapshot` and honors `refreshIntervalMin` /
   `hideWhenNoData`.

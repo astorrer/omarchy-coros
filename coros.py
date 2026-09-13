@@ -28,6 +28,8 @@ BASES = {
     "eu": "https://teameuapi.coros.com",
     "us": "https://teamapi.coros.com",
 }
+# Login responses include regionId; 1 is America (teamapi), 3 is Europe.
+REGION_IDS = {1: "us", 3: "eu"}
 TOKEN_TTL_MS = 24 * 3600 * 1000
 REQUEST_TIMEOUT_S = 15
 DEFAULT_INTERVAL_S = 30
@@ -35,10 +37,26 @@ DEFAULT_INTERVAL_S = 30
 NULL_SNAPSHOT = {
     "hrv": None,
     "hrvBaseline": None,
+    "hrvBandLow": None,
+    "hrvBandHigh": None,
     "rhr": None,
+    "testRhr": None,
     "load": None,
-    "sleepH": None,
+    "load7d": None,
+    "load28d": None,
+    "loadRatio": None,
+    "loadState": None,
+    "loadWeek": None,
+    "loadWeekMin": None,
+    "loadWeekMax": None,
+    "ati": None,
+    "cti": None,
+    "balance": None,
+    "fatigue": None,
+    "fatigueState": None,
     "activity": None,
+    "activityDay": None,
+    "day": None,
     "error": None,  # null | "auth" | "network"
 }
 
@@ -204,6 +222,15 @@ def other_region(region):
     return "us" if region == "eu" else "eu"
 
 
+def region_from_login(data, requested):
+    """Prefer the account's Training Hub region over the caller's guess."""
+    try:
+        mapped = REGION_IDS.get(int(data.get("regionId")))
+    except (TypeError, ValueError):
+        mapped = None
+    return mapped if mapped in BASES else requested
+
+
 def do_login(email, password, region):
     resp = http_json(
         "POST",
@@ -213,15 +240,19 @@ def do_login(email, password, region):
     )
     code = result_code(resp)
     if code is not None and code != 0:
-        raise ValueError("login returned result " + str(code))
+        message = ""
+        if isinstance(resp, dict) and resp.get("message"):
+            message = ": " + str(resp.get("message"))
+        raise ValueError("login returned result " + str(code) + message)
     data = resp.get("data") if isinstance(resp, dict) else None
     data = data if isinstance(data, dict) else {}
     token = data.get("accessToken")
     user_id = data.get("userId", data.get("userID", data.get("id")))
     if not token or user_id is None:
         raise ValueError("login response has no access token")
-    save_token(token, user_id, region)
-    return token, user_id, region
+    used = region_from_login(data, region)
+    save_token(token, user_id, used)
+    return token, user_id, used
 
 
 def login(email, password, region):
@@ -249,54 +280,153 @@ def api_get(base, path, token, user_id):
     )
 
 
+def day_timestamp(day):
+    for key in ("happenDay", "date", "day"):
+        try:
+            return int(day.get(key))
+        except (TypeError, ValueError):
+            continue
+    ts = num(day.get("timestamp"))
+    return int(ts) if ts is not None else 0
+
+
+def has_recovery(day):
+    return (
+        num(day.get("avgSleepHrv")) is not None
+        or num(day.get("rhr")) is not None
+        or num(day.get("testRhr")) is not None
+    )
+
+
 def day_entry(resp):
     data = resp.get("data") if isinstance(resp, dict) else None
     days = data.get("dayList") if isinstance(data, dict) else data
     if days is None and isinstance(resp, dict):
         days = resp.get("dayList")
-    if isinstance(days, list) and days and isinstance(days[0], dict):
-        return days[0]
-    return {}
+    if not isinstance(days, list):
+        return {}
+    days = [day for day in days if isinstance(day, dict)]
+    if not days:
+        return {}
+    days.sort(key=day_timestamp)
+    for day in reversed(days):
+        if has_recovery(day):
+            return day
+    return days[-1]
 
 
-def activity_name(resp):
+def iso_day(value):
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
+        value = int(value)
+    if isinstance(value, int):
+        raw = str(value)
+    else:
+        raw = str(value).strip().replace("-", "")
+    if len(raw) != 8 or not raw.isdigit():
+        return None
+    return raw[0:4] + "-" + raw[4:6] + "-" + raw[6:8]
+
+
+def activity_sort_key(item):
+    for key in ("startTime", "endTime", "date"):
+        try:
+            return int(item.get(key))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def last_activity(resp):
     data = resp.get("data") if isinstance(resp, dict) else None
     items = []
     if isinstance(data, dict):
         for key in ("dataList", "list", "activities", "records"):
             if isinstance(data.get(key), list):
-                items = data[key]
+                items = [row for row in data[key] if isinstance(row, dict)]
                 break
     elif isinstance(data, list):
-        items = data
-    if items and isinstance(items[0], dict):
-        for key in ("name", "workoutName", "title", "label"):
-            if items[0].get(key):
-                return str(items[0][key])
-    return None
+        items = [row for row in data if isinstance(row, dict)]
+    if not items:
+        return None, None
+    item = max(items, key=activity_sort_key)
+    name = None
+    for key in ("name", "workoutName", "title", "label"):
+        if item.get(key):
+            name = str(item[key])
+            break
+    return name, iso_day(item.get("date"))
 
 
 def num(value):
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
         return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else value
     return None
 
 
-def parse_snapshot(day, activity):
+def state(value):
+    n = num(value)
+    if n is None:
+        return None
+    n = int(n)
+    return n if 1 <= n <= 5 else None
+
+
+def hrv_band(day):
+    raw = day.get("sleepHrvIntervalList")
+    if not isinstance(raw, list) or len(raw) < 4:
+        return None, None
+    return num(raw[2]), num(raw[3])
+
+
+def week_entry(resp):
+    data = resp.get("data") if isinstance(resp, dict) else None
+    weeks = data.get("weekList") if isinstance(data, dict) else None
+    if not isinstance(weeks, list):
+        return {}
+    weeks = [week for week in weeks if isinstance(week, dict)]
+    return weeks[-1] if weeks else {}
+
+
+def parse_snapshot(day, activity, activity_day=None, week=None):
     day = day if isinstance(day, dict) else {}
-    tib = num(day.get("tib"))
+    week = week if isinstance(week, dict) else {}
     rhr = num(day.get("rhr"))
+    test_rhr = num(day.get("testRhr"))
     if rhr is None:
-        rhr = num(day.get("testRhr"))
+        rhr = test_rhr
+    band_low, band_high = hrv_band(day)
+    ratio = num(day.get("trainingLoadRatio"))
     return {
         "hrv": num(day.get("avgSleepHrv")),
         "hrvBaseline": num(day.get("sleepHrvBase")),
+        "hrvBandLow": band_low,
+        "hrvBandHigh": band_high,
         "rhr": rhr,
+        "testRhr": test_rhr,
         "load": num(day.get("trainingLoad")),
-        "sleepH": round(tib / 60, 1) if tib is not None else None,
+        "load7d": num(day.get("t7d")),
+        "load28d": num(day.get("t28d")),
+        "loadRatio": round(ratio, 2) if ratio is not None else None,
+        "loadState": state(day.get("trainingLoadRatioState")),
+        "loadWeek": num(week.get("trainingLoad")),
+        "loadWeekMin": num(week.get("recomendTlMin", day.get("recomendTlMin"))),
+        "loadWeekMax": num(week.get("recomendTlMax", day.get("recomendTlMax"))),
+        "ati": num(day.get("ati")),
+        "cti": num(day.get("cti")),
+        "balance": num(day.get("tib")),
+        "fatigue": num(day.get("tiredRateNew", day.get("tiredRate"))),
+        "fatigueState": state(day.get("tiredRateStateNew")),
         "activity": activity,
+        "activityDay": activity_day,
+        "day": iso_day(day.get("happenDay") or day.get("date") or day.get("day")),
         "error": None,
     }
 
@@ -330,16 +460,16 @@ def get_snapshot(region):
 
         today = ymd(time.time())
         week_ago = ymd(time.time() - 6 * 86400)
-        day = day_entry(
-            get("/analyse/dayDetail/query?" + urllib.parse.urlencode({"startDay": today, "endDay": today}))
-        )
-        activity = activity_name(
+        # Training Hub often leaves today blank until overnight HRV lands;
+        # walk the trailing week and keep the newest day that has recovery data.
+        detail = get("/analyse/dayDetail/query?" + urllib.parse.urlencode({"startDay": week_ago, "endDay": today}))
+        activity, activity_day = last_activity(
             get(
                 "/activity/query?"
-                + urllib.parse.urlencode({"size": 1, "pageNumber": 1, "startDay": week_ago, "endDay": today})
+                + urllib.parse.urlencode({"size": 10, "pageNumber": 1, "startDay": week_ago, "endDay": today})
             )
         )
-        return parse_snapshot(day, activity)
+        return parse_snapshot(day_entry(detail), activity, activity_day, week_entry(detail))
     except ValueError as exc:  # login rejected on both regions: back off, don't hammer
         eprint("coros.py: login failed: " + str(exc))
         trip_cooldown()
@@ -363,17 +493,24 @@ def resolve_region(flag):
     return conf if conf in BASES else "eu"
 
 
+def read_login_body():
+    """One JSON object from stdin. A single line is enough; full-stdin still works."""
+    raw = sys.stdin.readline()
+    if not str(raw).strip():
+        raw = sys.stdin.read()
+    try:
+        body = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        body = {}
+    return body if isinstance(body, dict) else {}
+
+
 def cmd_login():
     """Read {email,password,region} JSON from stdin, store 0600 creds, print a snapshot.
 
     Password never appears on argv. Always one JSON object on stdout, exit 0.
     """
-    try:
-        body = json.loads(sys.stdin.read() or "{}")
-    except json.JSONDecodeError:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
+    body = read_login_body()
     email = str(body.get("email") or "").strip()
     password = str(body.get("password") or "")
     region = str(body.get("region") or "eu").strip().lower()
@@ -382,7 +519,7 @@ def cmd_login():
     if not email or not password:
         snap = dict(NULL_SNAPSHOT)
         snap["error"] = "auth"
-        print(json.dumps(snap))
+        print(json.dumps(snap), flush=True)
         return 0
     try:
         write_credentials(email, password, region)
@@ -391,22 +528,29 @@ def cmd_login():
         eprint("coros.py: could not write credentials: " + str(exc))
         snap = dict(NULL_SNAPSHOT)
         snap["error"] = "auth"
-        print(json.dumps(snap))
+        print(json.dumps(snap), flush=True)
         return 0
-    print(json.dumps(get_snapshot(region)))
+    snap = get_snapshot(region)
+    cached = load_token()
+    used = cached.get("region") if cached else None
+    if used in BASES and used != region:
+        try:
+            write_credentials(email, password, used)
+        except OSError as exc:
+            eprint("coros.py: could not update stored region: " + str(exc))
+    print(json.dumps(snap), flush=True)
     return 0
 
 
 def cmd_snapshot(region_flag):
-    print(json.dumps(get_snapshot(resolve_region(region_flag))))
+    print(json.dumps(get_snapshot(resolve_region(region_flag))), flush=True)
     return 0
 
 
 def cmd_watch(region_flag, interval):
     try:
         while True:
-            print(json.dumps(get_snapshot(resolve_region(region_flag))))
-            sys.stdout.flush()
+            print(json.dumps(get_snapshot(resolve_region(region_flag))), flush=True)
             time.sleep(interval)
     except KeyboardInterrupt:
         pass

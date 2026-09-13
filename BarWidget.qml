@@ -17,25 +17,31 @@ BarWidget {
   property string actionStatus: ""
   property string _pollRegion: ""
 
-  readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 5, 120)
+  readonly property int refreshIntervalMin: {
+    var n = parseInt(String(setting("refreshIntervalMin", "")), 10)
+    if (isFinite(n)) return Model.clampRefreshMinutes(n)
+    var sec = parseInt(String(setting("refreshIntervalSec", "")), 10)
+    if (isFinite(sec) && sec > 0) return Model.clampRefreshMinutes(Math.round(sec / 60) || Model.REFRESH_MIN_MINUTES)
+    return Model.REFRESH_DEFAULT_MINUTES
+  }
   readonly property string region: validRegion(setting("region", "eu"))
   readonly property bool hideWhenNoData: setting("hideWhenNoData", false) === true
+  readonly property bool showRecovery: setting("showRecovery", true) !== false
+  readonly property bool showLoad: setting("showLoad", true) !== false
+  readonly property bool showActivity: setting("showActivity", true) !== false
+  readonly property string barMetric: Model.validBarMetric(setting("barMetric", "hrv"))
   readonly property string helperPath: decodeURIComponent(Qt.resolvedUrl("coros.py").toString().replace(/^file:\/\//, ""))
 
-  readonly property string barText: Model.formatSnapshot(snapshot)
-  readonly property string tooltipText: barText !== ""
-    ? "COROS — " + barText
-    : (Model.authError(snapshot) ? "COROS — sign in from the panel" : "COROS")
+  readonly property string barText: {
+    if (barMetric === "icon") return ""
+    var compact = Model.formatBar(snapshot, barMetric)
+    return compact !== "" ? compact : "COROS"
+  }
+  readonly property string tooltipText: Model.formatTooltip(snapshot)
 
   property bool loginBusy: false
 
   visible: Model.authError(snapshot) || !hideWhenNoData || !Model.isEmpty(snapshot)
-
-  function intSetting(name, fallback, min, max) {
-    var n = parseInt(String(setting(name, fallback)), 10)
-    if (!isFinite(n)) n = fallback
-    return Math.min(max, Math.max(min, n))
-  }
 
   function validRegion(value) {
     var r = String(value === undefined || value === null ? "" : value).trim().toLowerCase()
@@ -66,7 +72,8 @@ BarWidget {
     var r = validRegion(region)
     loginBusy = true
     notify("Signing in…")
-    loginProcess.payload = JSON.stringify({ email: email, password: password, region: r })
+    loginProcess.payload = JSON.stringify({ email: email, password: password, region: r }) + "\n"
+    loginProcess.stdinEnabled = true
     loginProcess.running = false
     loginProcess.running = true
     writeSetting("region", r)
@@ -117,13 +124,23 @@ BarWidget {
     if (!target) return
     if ("bar" in target) target.bar = root.bar
     if ("hostWidget" in target) target.hostWidget = root
-    if ("anchorItem" in target) target.anchorItem = button
+    if ("anchorItem" in target) target.anchorItem = root.barMetric === "icon" ? iconBtn : textBtn
   }
 
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  implicitWidth: root.barMetric === "icon" ? iconBtn.implicitWidth : textBtn.implicitWidth
+  implicitHeight: root.barMetric === "icon" ? iconBtn.implicitHeight : textBtn.implicitHeight
+
+  // A bit longer than the default 55% dash, still centered on the mark
+  // rather than spanning the whole slot (that overshoots left of the hex).
+  readonly property real openPanelIndicatorWidth: root.barMetric === "icon"
+    ? Style.bar.iconCanvas + Style.space(6)
+    : (textBtn.labelWidth > 0 ? textBtn.labelWidth : 0)
+  readonly property real openPanelIndicatorHeight: root.barMetric === "icon"
+    ? Style.bar.iconSlot
+    : 0
 
   onBarChanged: injectPanel()
+  onBarMetricChanged: Qt.callLater(root.injectPanel)
 
   onSettingsChanged: {
     if (region !== _pollRegion) {
@@ -139,7 +156,7 @@ BarWidget {
 
   Timer {
     id: pollTimer
-    interval: root.refreshIntervalSec * 1000
+    interval: root.refreshIntervalMin * 60 * 1000
     repeat: true
     running: true
     onTriggered: root.poll()
@@ -156,8 +173,9 @@ BarWidget {
     id: snapshotProcess
     running: false
     command: root.snapshotArgs()
-    stdout: SplitParser {
-      onRead: root.applySnapshotLine(read)
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applySnapshotLine(text)
     }
   }
 
@@ -167,12 +185,15 @@ BarWidget {
     stdinEnabled: true
     property string payload: ""
     command: ["python3", root.helperPath, "login"]
-    stdout: SplitParser {
-      onRead: root.applySnapshotLine(read)
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applySnapshotLine(text)
     }
     onStarted: {
       write(payload)
       payload = ""
+      // Close the write channel so coros.py login sees EOF (stdin.read / readline).
+      stdinEnabled = false
     }
     onExited: {
       root.loginBusy = false
@@ -203,14 +224,37 @@ BarWidget {
     }
   }
 
-  BarIconButton {
-    id: button
+  WidgetButton {
+    id: textBtn
+    visible: root.barMetric !== "icon"
     anchors.fill: parent
     bar: root.bar
-    text: root.barText !== "" ? root.barText : "COROS"
-    slotSize: Style.bar.statusSlot
+    text: root.barText
+    fontSize: Style.font.caption
+    horizontalMargin: 8
+    dimmed: Model.authError(root.snapshot)
     tooltipText: root.tooltipText
+    onPressed: function(buttonCode) {
+      if (buttonCode === Qt.RightButton) root.refresh()
+      else root.togglePanel()
+    }
+  }
 
+  BarIconButton {
+    id: iconBtn
+    visible: root.barMetric === "icon"
+    anchors.fill: parent
+    bar: root.bar
+    slotSize: Style.bar.iconSlot
+    tooltipText: root.tooltipText
+    dimmed: Model.authError(root.snapshot)
+    iconComponent: Component {
+      CorosIcon {
+        anchors.fill: parent
+        color: iconBtn.foreground
+        dimmed: Model.authError(root.snapshot)
+      }
+    }
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.refresh()
       else root.togglePanel()

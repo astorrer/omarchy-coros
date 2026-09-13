@@ -9,9 +9,11 @@ sleep, training load) on the bar. Follows the omdeako pattern.
   not Partner API. Per-user self-login, nothing hosted.
 - `coros.py`: stdlib only, no pip installs. One-shot commands print exactly one
   JSON object on stdout; `watch` streams NDJSON (omdeako contract).
-- v1 metrics: HRV vs baseline, RHR, training load, last activity.
-  Steps deferred (not in `dayList` as reverse-engineered). No mobile sleep API
-  in v1 (AES login, 1h TTL, logs phone app out).
+- v1 metrics: whatever Training Hub `dayDetail` actually returns (HRV vs
+  baseline and band, RHR / test RHR, daily and rolling load, load ratio,
+  weekly target, acute/chronic, impact balance, fatigue) plus last activity.
+  No mobile sleep API in v1 (AES login, 1h TTL, logs phone app out). `tib`
+  is training impact balance, not time in bed.
 - Auth: `POST /account/login {account, accountType:2, pwd: md5}`, token cached
   in `~/.cache/omarchy-coros/token.json` mode 0600, 24h TTL. Retry login on
   `1019`, try other region. Password never stored.
@@ -19,10 +21,10 @@ sleep, training load) on the bar. Follows the omdeako pattern.
 ## Contract (branches must agree)
 
 - `coros.py snapshot` prints:
-  `{"hrv":42,"hrvBaseline":45,"rhr":48,"load":85,"sleepH":7.2,"activity":"Run 10k","error":null}`
-  Metrics null when missing; `error` is null, "auth" (polls back off 1h), or
-  "network". Never an error exit for display.
-- Settings keys (`manifest.json` schema): `refreshIntervalSec`, `region`
+  one JSON object from Training Hub `dayDetail` + last activity (see AGENTS.md
+  for keys). Metrics null when missing. `error` is null, "auth" (polls back
+  off 1h), or "network". Never an error exit for display.
+- Settings keys (`manifest.json` schema): `refreshIntervalMin`, `region`
   (`eu`/`us`), `hideWhenNoData`. QML reads the same keys.
 - Credentials: env `COROS_EMAIL`/`COROS_PASSWORD` wins;
   `~/.config/omarchy-coros/credentials` (0600, written by `coros.py login` from
@@ -38,7 +40,7 @@ sleep, training load) on the bar. Follows the omdeako pattern.
 - `feat/api-client`: `coros.py` + `tests/test_coros.py` (mocked HTTP, no
   network). Owns only those two files.
 - `feat/ui`: `BarWidget.qml`, `Panel.qml`, `Model.js` + QML/JS test hooks.
-  Polls `coros.py snapshot`, honors `refreshIntervalSec`/`hideWhenNoData`.
+  Polls `coros.py snapshot`, honors `refreshIntervalMin`/`hideWhenNoData`.
   Owns only QML/JS files.
 
 ## Order

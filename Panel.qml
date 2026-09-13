@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
@@ -20,34 +21,33 @@ Panel {
   readonly property var client: hostWidget
   readonly property var snapshot: client ? client.snapshot : null
   readonly property bool showLogin: view === "login" || (view === "main" && Model.authError(snapshot))
+  readonly property string regionText: Model.regionLabel(client ? client.region : "eu")
 
   readonly property string statusText: {
     if (!client) return ""
     if (client.actionStatus !== "") return client.actionStatus
-    if (showLogin) return "Sign in to your COROS account."
-    if (Model.isEmpty(snapshot)) return "No COROS data yet — open Settings to sign in."
-    return ""
+    if (client.loginBusy) return "Signing in…"
+    if (!snapshot) return "Checking COROS…"
+    if (Model.authError(snapshot)) return "Sign in required"
+    if (Model.isEmpty(snapshot)) return "Signed in · " + regionText + " · waiting on metrics"
+    return "Signed in · " + regionText
   }
 
-  readonly property string hrvText: {
-    if (!snapshot || snapshot.hrv === null || snapshot.hrv === undefined) return "—"
-    var text = String(snapshot.hrv)
-    if (snapshot.hrvBaseline !== null && snapshot.hrvBaseline !== undefined) {
-      var delta = Model.hrvDelta(snapshot.hrv, snapshot.hrvBaseline)
-      text += "  (baseline " + snapshot.hrvBaseline
-      if (delta !== null) {
-        var r = Math.round(delta)
-        text += ", " + (r > 0 ? "+" + r : String(r))
-      }
-      text += ")"
-    }
-    return text
-  }
-
-  readonly property string sleepText: {
-    if (!snapshot || snapshot.sleepH === null || snapshot.sleepH === undefined) return "—"
-    var n = Number(snapshot.sleepH)
-    return isFinite(n) ? n.toFixed(1) + " h" : "—"
+  readonly property string hrvValue: metricText(snapshot ? snapshot.hrv : null)
+  readonly property string hrvMeta: {
+    var parts = []
+    var day = snapshot ? Model.formatDay(snapshot.day) : ""
+    if (day !== "") parts.push(day)
+    parts.push("Overnight HRV")
+    if (snapshot && snapshot.hrvBaseline !== null && snapshot.hrvBaseline !== undefined)
+      parts.push("baseline " + snapshot.hrvBaseline)
+    var delta = snapshot ? Model.hrvDelta(snapshot.hrv, snapshot.hrvBaseline) : null
+    var formatted = Model.formatDelta(delta)
+    if (formatted !== "") parts.push(formatted)
+    if (snapshot && snapshot.hrvBandLow !== null && snapshot.hrvBandLow !== undefined
+        && snapshot.hrvBandHigh !== null && snapshot.hrvBandHigh !== undefined)
+      parts.push(snapshot.hrvBandLow + "–" + snapshot.hrvBandHigh)
+    return parts.join(" · ")
   }
 
   function metricText(value) {
@@ -101,13 +101,37 @@ Panel {
 
   function bumpRefresh(delta) {
     if (!client) return
-    var next = client.refreshIntervalSec + delta
-    client.writeSetting("refreshIntervalSec", Math.min(120, Math.max(5, next)))
+    client.writeSetting(
+      "refreshIntervalMin",
+      Model.clampRefreshMinutes(client.refreshIntervalMin + delta * Model.REFRESH_STEP_MINUTES)
+    )
   }
 
-  function setRegion(value) {
-    if (!client) return
-    client.writeSetting("region", value === "us" ? "us" : "eu")
+  component MetricCell: Column {
+    id: cell
+    property string label: ""
+    property string value: "—"
+    spacing: Style.space(2)
+
+    Text {
+      width: parent.width
+      text: cell.label
+      color: root.barForeground
+      opacity: 0.45
+      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+      font.pixelSize: Style.font.caption
+    }
+
+    Text {
+      width: parent.width
+      text: cell.value
+      color: root.barForeground
+      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+      font.pixelSize: Style.font.body
+      elide: Text.ElideRight
+      wrapMode: Text.NoWrap
+      textFormat: Text.PlainText
+    }
   }
 
   KeyboardPanel {
@@ -131,40 +155,37 @@ Panel {
       Column {
         id: content
         width: parent.width
-        spacing: Style.space(10)
+        spacing: Style.space(12)
 
-        // ---- Header: title, refresh. ----
-        Item {
+        RowLayout {
           width: parent.width
-          height: Math.max(title.implicitHeight, refreshLabel.implicitHeight)
+          spacing: Style.space(8)
 
           Text {
-            id: title
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
             text: "COROS"
             color: root.barForeground
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.subtitle
             font.bold: true
+            elide: Text.ElideRight
+            Layout.fillWidth: true
           }
 
           Text {
-            id: refreshLabel
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+            visible: !root.showLogin
             text: "Refresh"
             color: root.barForeground
             opacity: 0.65
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.body
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
 
             MouseArea {
               anchors.fill: parent
               anchors.margins: -Style.space(4)
               cursorShape: Qt.PointingHandCursor
               onClicked: {
-                if (client) client.refresh()
+                if (root.client) root.client.refresh()
               }
             }
           }
@@ -172,244 +193,141 @@ Panel {
 
         Text {
           width: parent.width
-          visible: (root.view === "main" || root.showLogin) && statusText !== ""
-          text: statusText
-          color: root.barForeground
-          opacity: 0.55
+          visible: root.statusText !== ""
+          text: root.statusText
+          color: Model.authError(root.snapshot) && !(root.client && root.client.actionStatus) ? Color.urgent : root.barForeground
+          opacity: Model.authError(root.snapshot) && !(root.client && root.client.actionStatus) ? 1.0 : 0.55
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.body
-          elide: Text.ElideMiddle
+          wrapMode: Text.WordWrap
         }
 
-        // ---- Sign-in: email/password over stdin to coros.py login, never argv. ----
         Column {
           visible: root.showLogin
           width: parent.width
           spacing: Style.space(10)
 
-          Column {
+          TextField {
+            id: emailField
             width: parent.width
-            spacing: 2
-            Text {
-              text: "Email"
-              color: root.barForeground
-              opacity: 0.45
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-            }
-            TextInput {
-              width: parent.width
-              color: root.barForeground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              clip: true
-              text: root.draftEmail
-              onTextChanged: root.draftEmail = text
-              Rectangle {
-                width: parent.width
-                height: 1
-                color: root.barForeground
-                opacity: 0.25
-                anchors.bottom: parent.bottom
-              }
-            }
+            placeholderText: "Email"
+            text: root.draftEmail
+            foreground: root.barForeground
+            onTextChanged: root.draftEmail = text
+            Keys.onReturnPressed: passwordField.forceActiveFocus()
           }
 
-          Column {
+          TextField {
+            id: passwordField
             width: parent.width
-            spacing: 2
-            Text {
-              text: "Password"
-              color: root.barForeground
-              opacity: 0.45
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-            }
-            TextInput {
-              width: parent.width
-              color: root.barForeground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              clip: true
-              echoMode: TextInput.Password
-              text: root.draftPassword
-              onTextChanged: root.draftPassword = text
-              onAccepted: root.submitLogin()
-              Rectangle {
-                width: parent.width
-                height: 1
-                color: root.barForeground
-                opacity: 0.25
-                anchors.bottom: parent.bottom
-              }
-            }
-          }
-
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-            Text {
-              text: "Region"
-              color: root.barForeground
-              opacity: 0.55
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              Layout.fillWidth: true
-            }
-            Text {
-              text: "eu"
-              color: root.barForeground
-              opacity: root.draftRegion === "eu" ? 1.0 : 0.45
-              font.bold: root.draftRegion === "eu"
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              MouseArea {
-                anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.draftRegion = "eu"
-              }
-            }
-            Text {
-              text: "us"
-              color: root.barForeground
-              opacity: root.draftRegion === "us" ? 1.0 : 0.45
-              font.bold: root.draftRegion === "us"
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              MouseArea {
-                anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.draftRegion = "us"
-              }
-            }
+            placeholderText: "Password"
+            password: true
+            text: root.draftPassword
+            foreground: root.barForeground
+            onTextChanged: root.draftPassword = text
+            onAccepted: root.submitLogin()
           }
 
           Text {
             width: parent.width
-            text: root.client && root.client.loginBusy ? "Signing in…" : "Sign in"
+            text: "Region"
             color: root.barForeground
-            opacity: root.client && root.client.loginBusy ? 0.45 : 0.85
+            opacity: 0.45
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.body
-            font.bold: true
-            MouseArea {
-              anchors.fill: parent
-              anchors.margins: -Style.space(4)
-              cursorShape: Qt.PointingHandCursor
-              enabled: !(root.client && root.client.loginBusy)
-              onClicked: root.submitLogin()
-            }
+            font.pixelSize: Style.font.caption
+          }
+
+          ButtonGroup {
+            width: parent.width
+            options: [
+              { value: "us", label: "US" },
+              { value: "eu", label: "EU" }
+            ]
+            value: root.draftRegion
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            focusable: false
+            onChanged: function(value) { root.draftRegion = value }
+          }
+
+          Text {
+            width: parent.width
+            text: root.draftRegion === "us"
+              ? "America Training Hub (t.coros.com)"
+              : "Europe Training Hub (t.eu.coros.com)"
+            color: root.barForeground
+            opacity: 0.35
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
+          Button {
+            width: parent.width
+            text: root.client && root.client.loginBusy ? "Signing in…" : "Sign in"
+            foreground: root.barForeground
+            enabled: !(root.client && root.client.loginBusy)
+            onClicked: root.submitLogin()
           }
         }
 
-        // ---- Main view: recovery metrics, footer with the gear. ----
         Column {
           visible: root.view === "main" && !root.showLogin
           width: parent.width
-          spacing: Style.space(10)
+          spacing: Style.space(12)
 
           Column {
             width: parent.width
-            spacing: Style.space(8)
+            spacing: Style.space(2)
 
-            RowLayout {
+            Text {
               width: parent.width
-              spacing: Style.space(8)
-              Text {
-                text: "HRV"
-                color: root.barForeground
-                opacity: 0.55
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-                Layout.fillWidth: true
-              }
-              Text {
-                text: root.hrvText
-                color: root.barForeground
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-              }
+              visible: !root.client || root.client.showRecovery
+              text: root.hrvValue
+              color: root.barForeground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.title
+              font.bold: true
+              elide: Text.ElideRight
             }
 
-            RowLayout {
+            Text {
               width: parent.width
-              spacing: Style.space(8)
-              Text {
-                text: "Resting HR"
-                color: root.barForeground
-                opacity: 0.55
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-                Layout.fillWidth: true
-              }
-              Text {
-                text: root.snapshot ? root.metricText(root.snapshot.rhr) : "—"
-                color: root.barForeground
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-              }
+              visible: !root.client || root.client.showRecovery
+              text: root.hrvMeta
+              color: root.barForeground
+              opacity: 0.55
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
+          }
 
-            RowLayout {
-              width: parent.width
-              spacing: Style.space(8)
-              Text {
-                text: "Training load"
-                color: root.barForeground
-                opacity: 0.55
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-                Layout.fillWidth: true
-              }
-              Text {
-                text: root.snapshot ? root.metricText(root.snapshot.load) : "—"
-                color: root.barForeground
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-              }
-            }
+          Flickable {
+            width: parent.width
+            height: Math.min(metricsCol.implicitHeight, Style.space(320))
+            contentHeight: metricsCol.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
 
-            RowLayout {
+            Column {
+              id: metricsCol
               width: parent.width
-              spacing: Style.space(8)
-              Text {
-                text: "Sleep"
-                color: root.barForeground
-                opacity: 0.55
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-                Layout.fillWidth: true
-              }
-              Text {
-                text: root.sleepText
-                color: root.barForeground
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-              }
-            }
+              spacing: Style.space(10)
 
-            RowLayout {
-              width: parent.width
-              spacing: Style.space(8)
-              Text {
-                text: "Last activity"
-                color: root.barForeground
-                opacity: 0.55
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-                Layout.fillWidth: true
-              }
-              Text {
-                text: root.snapshot ? root.metricText(root.snapshot.activity) : "—"
-                // User-authored activity names: never interpret markup.
-                textFormat: Text.PlainText
-                color: root.barForeground
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-                elide: Text.ElideRight
-                Layout.maximumWidth: parent.width * 0.6
+              Repeater {
+                model: Model.metricRows(root.snapshot, {
+                  recovery: !root.client || root.client.showRecovery,
+                  load: !root.client || root.client.showLoad,
+                  activity: !root.client || root.client.showActivity
+                })
+
+                MetricCell {
+                  required property var modelData
+                  width: metricsCol.width
+                  label: modelData.label
+                  value: modelData.value
+                }
               }
             }
           }
@@ -428,6 +346,8 @@ Panel {
               opacity: 0.45
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              Layout.fillWidth: true
               Layout.alignment: Qt.AlignVCenter
               MouseArea {
                 anchors.fill: parent
@@ -435,10 +355,6 @@ Panel {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.openProject()
               }
-            }
-
-            Item {
-              Layout.fillWidth: true
             }
 
             PanelActionButton {
@@ -451,7 +367,6 @@ Panel {
           }
         }
 
-        // ---- Settings view: toggles, interval stepper, region. ----
         Column {
           visible: root.view === "settings"
           width: parent.width
@@ -491,17 +406,20 @@ Panel {
 
           Text {
             width: parent.width
-            text: "Change account"
+            text: "Account · " + root.regionText
             color: root.barForeground
-            opacity: 0.85
+            opacity: 0.55
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.body
-            MouseArea {
-              anchors.fill: parent
-              anchors.margins: -Style.space(4)
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.openLogin()
-            }
+            wrapMode: Text.WordWrap
+          }
+
+          Button {
+            width: parent.width
+            text: "Change account"
+            foreground: root.barForeground
+            bordered: true
+            onClicked: root.openLogin()
           }
 
           Toggle {
@@ -519,12 +437,85 @@ Panel {
             }
           }
 
+          PanelSectionHeader {
+            width: parent.width
+            text: "PANEL"
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Overnight"
+            description: "HRV, resting HR, balance, and fatigue."
+            checked: root.client ? root.client.showRecovery : true
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            titleSize: Style.font.body
+            onClicked: {
+              if (root.client) root.client.writeSetting("showRecovery", !root.client.showRecovery)
+            }
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Training load"
+            description: "Daily, rolling, and weekly load."
+            checked: root.client ? root.client.showLoad : true
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            titleSize: Style.font.body
+            onClicked: {
+              if (root.client) root.client.writeSetting("showLoad", !root.client.showLoad)
+            }
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Last activity"
+            description: "Most recent Training Hub workout."
+            checked: root.client ? root.client.showActivity : true
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            titleSize: Style.font.body
+            onClicked: {
+              if (root.client) root.client.writeSetting("showActivity", !root.client.showActivity)
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: "Bar"
+            color: root.barForeground
+            opacity: 0.45
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          ButtonGroup {
+            width: parent.width
+            options: [
+              { value: "icon", label: "Icon" },
+              { value: "hrv", label: "HRV" },
+              { value: "rhr", label: "RHR" },
+              { value: "load", label: "Load" },
+              { value: "fatigue", label: "Fatigue" }
+            ]
+            value: root.client ? root.client.barMetric : "hrv"
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            focusable: false
+            onChanged: function(value) {
+              if (root.client) root.client.writeSetting("barMetric", value)
+            }
+          }
+
           RowLayout {
             width: parent.width
             spacing: Style.space(8)
 
             Text {
-              text: "Refresh every " + (root.client ? root.client.refreshIntervalSec : 30) + "s"
+              text: Model.formatRefreshLabel(root.client ? root.client.refreshIntervalMin : Model.REFRESH_DEFAULT_MINUTES)
               color: root.barForeground
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.body
@@ -534,77 +525,17 @@ Panel {
 
             PanelActionButton {
               iconText: "−"
-              tooltipText: "Slower"
+              tooltipText: "Faster"
               foreground: root.barForeground
               onClicked: root.bumpRefresh(-1)
             }
 
             PanelActionButton {
               iconText: "+"
-              tooltipText: "Faster"
+              tooltipText: "Slower"
               foreground: root.barForeground
               onClicked: root.bumpRefresh(1)
             }
-          }
-
-          PanelSeparator {
-            width: parent.width
-          }
-
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Text {
-              text: "Region"
-              color: root.barForeground
-              opacity: 0.55
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              Layout.fillWidth: true
-            }
-
-            Text {
-              text: "eu"
-              color: root.barForeground
-              opacity: root.client && root.client.region === "eu" ? 1.0 : 0.45
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              font.bold: root.client && root.client.region === "eu"
-
-              MouseArea {
-                anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.setRegion("eu")
-              }
-            }
-
-            Text {
-              text: "us"
-              color: root.barForeground
-              opacity: root.client && root.client.region === "us" ? 1.0 : 0.45
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
-              font.bold: root.client && root.client.region === "us"
-
-              MouseArea {
-                anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.setRegion("us")
-              }
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: "Training Hub region for coros.py snapshot."
-            color: root.barForeground
-            opacity: 0.35
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
           }
         }
       }

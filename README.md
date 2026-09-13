@@ -32,12 +32,18 @@ panel asks you to sign in again.
 
 ## Use
 
-- The bar shows HRV, resting heart rate, training load, and the last activity.
+- The bar shows one compact metric (`HRV 24`); hover for the rest. Open the
+  panel for Training Hub recovery: HRV vs baseline and band, resting HR,
+  daily / 7-day / 28-day load, load ratio, weekly target, acute vs chronic,
+  impact balance, fatigue, and last activity.
+- The panel header shows whether you are signed in and which region (US/EU).
+  Region is chosen on the sign-in form, not in a second settings row.
 - Missing data shows as blank, never as an error — the helper exits zero and
   reports nulls when COROS has nothing (e.g. a rest day with no HRV sample).
-- The **gear** opens the settings view: poll interval, region, and
-  hide-when-empty. Settings are saved into the widget's config, so they
-  survive restarts.
+- The **gear** opens settings: which metric groups to show, what the bar
+  displays (COROS mark, HRV, RHR, load, or fatigue), poll interval,
+  hide-when-empty, and change account. Settings are saved into the widget's
+  config, so they survive restarts.
 
 ## Settings
 
@@ -45,9 +51,13 @@ Open from the gear in the panel, or Omarchy Settings → Bar → COROS:
 
 | Key                 | Type    | Default | Meaning                                 |
 |---------------------|---------|---------|-----------------------------------------|
-| `refreshIntervalSec`| integer | 30      | Snapshot poll interval (5–120)          |
+| `refreshIntervalMin`| integer | 30      | Snapshot poll interval (15 min–24 h)    |
 | `region`            | string  | `"eu"`  | COROS region, `eu` or `us`              |
 | `hideWhenNoData`    | boolean | false   | Remove the widget from the bar when empty |
+| `showRecovery`      | boolean | true    | Panel: HRV, RHR, balance, fatigue         |
+| `showLoad`          | boolean | true    | Panel: daily and rolling training load    |
+| `showActivity`      | boolean | true    | Panel: last workout                       |
+| `barMetric`         | string  | `"hrv"` | Bar: `icon`, `hrv`, `rhr`, `load`, `fatigue` |
 
 ## How it works
 
@@ -55,7 +65,7 @@ Open from the gear in the panel, or Omarchy Settings → Bar → COROS:
 (`teameuapi` for `eu`, `teamapi` for `us`), caches the auth token in
 `~/.cache/omarchy-coros/token.json` (mode 0600, 24h TTL), and prints one JSON
 snapshot object on stdout. The widget polls `coros.py snapshot` every
-`refreshIntervalSec`. The password is hashed for the login call and never
+`refreshIntervalMin`. The password is hashed for the login call and never
 stored.
 
 ## Remove
@@ -72,14 +82,26 @@ To drop the token cache this plugin wrote:
 
 ## Troubleshooting
 
-- **Widget empty / sign-in failed** — open the panel and sign in. A wrong
-  region is retried once automatically; wrong credentials back off for an
-  hour. Settings → Change account to switch users.
+- **Widget empty / sign-in failed** — open the panel and sign in. Pick **us**
+  if your account lives on the America Training Hub (`t.coros.com`), **eu**
+  for Europe (`t.eu.coros.com`). A wrong region is retried once automatically,
+  and a successful login follows COROS's `regionId` onto the right host.
+  Wrong credentials back off for an hour. This is email/password against the
+  Training Hub API — not WAF, and not 2FA. Settings → Change account to switch
+  users.
 - **Logged out of the phone app** — not expected from v1: the Training Hub web
   login does not touch the mobile session. (Only the mobile sleep API, not
   used here, forces the phone app out.)
 - **Stale data** — delete `~/.cache/omarchy-coros/token.json` to force a fresh
   login on the next poll.
+- **HRV / resting HR blank after sign-in** — Training Hub often leaves *today*
+  empty until overnight HRV is processed. The widget walks the last week and
+  shows the newest day that has recovery metrics. Right-click the bar widget
+  to refresh.
+- **Sleep missing even though the COROS app has it** — expected. Training Hub
+  `dayDetail` does not include sleep duration or stages (`tib` is training
+  impact balance, not time in bed). Sleep lives on the mobile API, which
+  logs you out of the phone app, so this plugin does not call it.
 
 ## Development
 

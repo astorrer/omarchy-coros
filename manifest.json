@@ -17,18 +17,22 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "refreshIntervalSec": 30,
+      "refreshIntervalMin": 30,
       "region": "eu",
-      "hideWhenNoData": false
+      "hideWhenNoData": false,
+      "showRecovery": true,
+      "showLoad": true,
+      "showActivity": true,
+      "barMetric": "hrv"
     },
     "schema": [
       {
-        "key": "refreshIntervalSec",
+        "key": "refreshIntervalMin",
         "type": "integer",
-        "label": "Refresh interval (seconds)",
-        "min": 5,
-        "max": 120,
-        "step": 1,
+        "label": "Refresh interval (minutes)",
+        "min": 15,
+        "max": 1440,
+        "step": 15,
         "defaultValue": 30
       },
       {
@@ -42,6 +46,30 @@
         "type": "boolean",
         "label": "Hide when no data available",
         "defaultValue": false
+      },
+      {
+        "key": "showRecovery",
+        "type": "boolean",
+        "label": "Show overnight recovery",
+        "defaultValue": true
+      },
+      {
+        "key": "showLoad",
+        "type": "boolean",
+        "label": "Show training load",
+        "defaultValue": true
+      },
+      {
+        "key": "showActivity",
+        "type": "boolean",
+        "label": "Show last activity",
+        "defaultValue": true
+      },
+      {
+        "key": "barMetric",
+        "type": "string",
+        "label": "Bar display (icon, hrv, rhr, load, or fatigue)",
+        "defaultValue": "hrv"
       }
     ]
   }
