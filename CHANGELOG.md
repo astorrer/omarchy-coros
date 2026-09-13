@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Trim marketplace publishing instructions from the README.
+
 ## 0.1.0 - 2026-09-12
 
 - Initial scaffold: `manifest.json`, `setup.sh`, `tests/run`, CI, docs.

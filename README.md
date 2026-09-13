@@ -100,10 +100,6 @@ ruff check .
 `./tests/run` lints, validates `manifest.json`, runs the Python tests (mocked
 HTTP, no network), `omarchy plugin validate`, and `qmllint`.
 
-To list this plugin on the [Omarchy marketplace](https://plugins.omarchy.org/publish.html),
-open the [submit form](https://github.com/omacom/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml)
-with the public repo URL. Listing is not a security review.
-
 ## License
 
 MIT. See [LICENSE](LICENSE).
