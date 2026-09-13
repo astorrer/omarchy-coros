@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import runpy
 import sys
 import tempfile
 import time
@@ -174,6 +175,7 @@ class CorosTest(unittest.TestCase):
         deny = unittest.mock.patch.object(urllib.request, "urlopen", deny_http)
         deny.start()
         self.addCleanup(deny.stop)
+        self.real_http_open = coros.http_open
         deny_open = unittest.mock.patch.object(coros, "http_open", deny_http)
         deny_open.start()
         self.addCleanup(deny_open.stop)
@@ -203,6 +205,15 @@ class CorosTest(unittest.TestCase):
         path = os.path.join(self.tmp.name, "omarchy-coros", "token.json")
         with open(path) as handle:
             return path, json.load(handle)
+
+    def write_cache(self, entry):
+        cache = os.path.join(self.tmp.name, "omarchy-coros")
+        os.makedirs(cache, mode=0o700, exist_ok=True)
+        path = os.path.join(cache, "token.json")
+        with open(path, "w") as handle:
+            json.dump(entry, handle)
+        os.chmod(path, 0o600)
+        return path
 
     def test_login_and_snapshot_parse(self):
         self.fake(full_routes())
@@ -833,6 +844,340 @@ class CorosTest(unittest.TestCase):
             ):
                 code = coros.main(["login"])
         self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["error"], "auth")
+
+
+    def test_login_same_host_redirect_followed(self):
+        handler = coros.NoRedirectHandler()
+        req = urllib.request.Request("https://teameuapi.coros.com/analyse/dayDetail/query", method="GET")
+        redirected = handler.redirect_request(req, None, 302, "Found", None, req.full_url)
+        self.assertIsInstance(redirected, urllib.request.Request)
+        self.assertEqual(redirected.full_url, req.full_url)
+
+    def test_credential_ok_rejects_non_string(self):
+        self.assertFalse(coros.credential_ok(None))
+        self.assertFalse(coros.credential_ok(5))
+
+    def test_write_credentials_rejects_injection_and_bad_region(self):
+        with self.assertRaises(ValueError):
+            coros.write_credentials("a\nb@c", "pw", "eu")
+        with self.assertRaises(ValueError):
+            coros.write_credentials("a@b", "pw\rx", "eu")
+        with self.assertRaises(ValueError):
+            coros.write_credentials("a@b", "pw", "cn")
+
+    def test_write_credentials_oserror_cleanup(self):
+        with (
+            unittest.mock.patch.object(coros.os, "fchmod", side_effect=OSError("chmod")),
+            unittest.mock.patch.object(coros.os, "close", side_effect=OSError("close")),
+            unittest.mock.patch.object(coros.os, "unlink", side_effect=OSError("unlink")),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaises(OSError):
+                coros.write_credentials("a@b.c", "pw", "eu")
+
+    def test_no_no_follow_fallback(self):
+        saved = getattr(coros.os, "O_NOFOLLOW", None)
+        has = hasattr(coros.os, "O_NOFOLLOW")
+        if has:
+            del coros.os.O_NOFOLLOW
+        try:
+            coros.write_credentials("a@b.c", "pw", "eu")
+            coros.save_token("tok", 7, "eu")
+            coros.trip_cooldown()
+        finally:
+            if has:
+                coros.os.O_NOFOLLOW = saved
+        self.assertTrue(os.path.exists(coros.cooldown_file()))
+        self.assertTrue(os.path.exists(coros.cache_file()))
+
+    def test_load_token_refuses_bool_token(self):
+        self.write_cache(
+            {"access_token": True, "user_id": 7, "region": "eu", "timestamp_ms": int(time.time() * 1000)}
+        )
+        self.fake(full_routes())
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+
+    def test_load_token_refuses_unknown_region(self):
+        self.write_cache(
+            {"access_token": "tok", "user_id": 7, "region": "cn", "timestamp_ms": int(time.time() * 1000)}
+        )
+        self.fake(full_routes())
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+
+    def test_load_token_refuses_stale_cache(self):
+        self.write_cache({"access_token": "tok", "user_id": 7, "region": "eu", "timestamp_ms": 1})
+        self.fake(full_routes())
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+
+    def test_coerce_token_rejects_unsafe_types(self):
+        for value in (True, False, {}, [], None):
+            self.assertIsNone(coros.coerce_token(value))
+        self.assertEqual(coros.coerce_token("  tok  "), "tok")
+
+    def test_coerce_user_id_edges(self):
+        self.assertIsNone(coros.coerce_user_id(True))
+        self.assertIsNone(coros.coerce_user_id(None))
+        self.assertIsNone(coros.coerce_user_id("not-an-int"))
+        self.assertIsNone(coros.coerce_user_id({}))
+        self.assertEqual(coros.coerce_user_id("7"), 7)
+
+    def test_save_token_noop_on_bad_input(self):
+        cache = os.path.join(os.path.dirname(coros.cache_file()), "token.json")
+        self.assertFalse(os.path.exists(cache))
+        coros.save_token(False, 7, "eu")
+        coros.save_token("tok", None, "eu")
+        coros.save_token("tok", 7, "cn")
+        self.assertFalse(os.path.exists(cache))
+
+    def test_save_token_failure_prints_and_cleans(self):
+        with (
+            unittest.mock.patch.object(coros.os, "open", side_effect=OSError("no space")),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            coros.save_token("tok", 7, "eu")
+
+    def test_save_token_cleanup_closes_on_partial_write(self):
+        with (
+            unittest.mock.patch.object(coros.os, "fchmod", side_effect=OSError("chmod")),
+            unittest.mock.patch.object(coros.os, "close", side_effect=OSError("close")),
+            unittest.mock.patch.object(coros.os, "unlink", side_effect=OSError("unlink")),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            coros.save_token("tok", 7, "eu")
+
+    def test_http_open_forwards_to_opener(self):
+        sentinel = object()
+        with unittest.mock.patch.object(coros, "http_open", self.real_http_open):
+            with unittest.mock.patch.object(coros._OPENER, "open", return_value=sentinel) as opener:
+                self.assertIs(coros.http_open("url", timeout=3), sentinel)
+                opener.assert_called_once_with("url", timeout=3)
+
+    def test_oversized_response_is_network_error(self):
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", ["x" * (coros.MAX_BODY_BYTES + 1)]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "network")
+
+    def test_result_code_bad_responses(self):
+        self.assertIsNone(coros.result_code(["not", "a", "dict"]))
+        self.assertIsNone(coros.result_code({"result": "NaN"}))
+        self.assertIsNone(coros.result_code({"result": {"nested": 1}}))
+
+    def test_login_failure_without_message(self):
+        fail = {"result": 1001}
+        self.fake([("account/login", [fail, fail])])
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
+
+    def test_login_response_without_token_falls_back(self):
+        self.fake(
+            [
+                ("account/login", [{"result": 0, "data": {}}, login_payload()]),
+                ("dayDetail", [day_payload()]),
+                ("activity/query", [activity_payload()]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+
+    def test_day_timestamp_fallbacks(self):
+        self.assertEqual(coros.day_timestamp({"happenDay": 20260910}), 20260910)
+        self.assertEqual(coros.day_timestamp({"timestamp": 5}), 5)
+        self.assertEqual(coros.day_timestamp({"happenDay": "2026-09-10"}), 0)
+
+    def test_day_entry_variants(self):
+        self.assertEqual(coros.day_entry({"dayList": []}), {})
+        self.assertEqual(coros.day_entry({"data": {"dayList": "x"}}), {})
+        no_recovery = [{"happenDay": 20260910, "trainingLoad": 1}, {"happenDay": 20260909}]
+        self.assertEqual(coros.day_entry({"data": {"dayList": no_recovery}}), no_recovery[0])
+
+    def test_iso_day_variants(self):
+        self.assertEqual(coros.iso_day(20260907.0), "2026-09-07")
+        self.assertIsNone(coros.iso_day(20260907.5))
+        self.assertEqual(coros.iso_day("2026-09-10"), "2026-09-10")
+        self.assertIsNone(coros.iso_day("nope"))
+        self.assertIsNone(coros.iso_day("2026091"))
+
+    def test_activity_sort_key_default_zero(self):
+        self.assertEqual(coros.activity_sort_key({"name": "x"}), 0)
+
+    def test_last_activity_no_named_key(self):
+        name, day = coros.last_activity({"data": {"dataList": [{"date": 20260907}]}})
+        self.assertIsNone(name)
+        self.assertEqual(day, "2026-09-07")
+
+    def test_last_activity_second_name_key_wins(self):
+        name, _ = coros.last_activity({"data": {"dataList": [{"name": "", "workoutName": "W"}]}})
+        self.assertEqual(name, "W")
+
+    def test_last_activity_missing_first_list_key(self):
+        name, day = coros.last_activity({"data": {"dataList": None, "list": [{"name": "R", "date": 20260907}]}})
+        self.assertEqual(name, "R")
+        self.assertEqual(day, "2026-09-07")
+
+    def test_last_activity_no_list_keys(self):
+        name, day = coros.last_activity({"data": {"workoutList": [{"name": "R"}]}})
+        self.assertIsNone(name)
+        self.assertIsNone(day)
+        name, day = coros.last_activity({"data": None})
+        self.assertIsNone(name)
+        self.assertIsNone(day)
+
+    def test_last_activity_data_list_direct(self):
+        name, day = coros.last_activity({"data": [{"name": "R", "date": 20260907}]})
+        self.assertEqual(name, "R")
+        self.assertEqual(day, "2026-09-07")
+
+    def test_num_rejects_bool(self):
+        self.assertIsNone(coros.num(True))
+        self.assertEqual(coros.num(3.0), 3)
+
+    def test_parse_snapshot_stringifies_non_str_activity(self):
+        snap = coros.parse_snapshot({}, 123)
+        self.assertEqual(snap["activity"], "123")
+
+    def test_resolve_region_from_env(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_REGION": "us"}):
+            self.assertEqual(coros.resolve_region(None), "us")
+        with unittest.mock.patch.dict(os.environ, {"COROS_REGION": ""}):
+            self.assertEqual(coros.resolve_region("us"), "us")
+            self.assertEqual(coros.resolve_region("cn"), "eu")
+
+    def test_read_bounded_stops_on_eof(self):
+        class EmptyReader:
+            def read(self, size=-1):
+                return ""
+
+        with unittest.mock.patch.object(sys, "stdin", EmptyReader()):
+            self.assertEqual(coros._read_bounded(10), "")
+
+    def test_login_bad_json_body_is_auth_error(self):
+        code, out, _ = self.run_cli(["login"], stdin_text="{not json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
+
+    def test_login_unknown_region_defaults_to_eu(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            self.fake(
+                [
+                    ("teameuapi.coros.com/account/login", [login_payload()]),
+                    ("dayDetail", [day_payload()]),
+                    ("activity/query", [activity_payload()]),
+                ]
+            )
+            payload = json.dumps({"email": "u@e.c", "password": "pw", "region": "cn"})
+            code, out, _ = self.run_cli(["login"], stdin_text=payload)
+        self.assertEqual(code, 0)
+        self.assertIsNone(json.loads(out)["error"])
+
+    def test_login_network_failure_is_network_error(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            self.fake(
+                [
+                    ("account/login", [urllib.error.URLError("down"), urllib.error.URLError("down")]),
+                ]
+            )
+            payload = json.dumps({"email": "u@e.c", "password": "pw", "region": "eu"})
+            code, out, _ = self.run_cli(["login"], stdin_text=payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "network")
+
+    def test_login_write_credentials_failure_is_auth_error(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            with (
+                unittest.mock.patch.object(coros, "login", return_value=("tok", 7, "zz")),
+                unittest.mock.patch.object(coros.os, "makedirs", side_effect=OSError("read-only")),
+            ):
+                payload = json.dumps({"email": "u@e.c", "password": "pw", "region": "eu"})
+                code, out, _ = self.run_cli(["login"], stdin_text=payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], "auth")
+
+    def test_parse_interval_bad_value(self):
+        self.assertIsNone(coros.parse_interval("abc"))
+        self.assertIsNone(coros.parse_interval("0"))
+
+    def test_usage_string(self):
+        self.assertIn("usage:", coros.usage())
+
+    def test_main_no_args_returns_usage(self):
+        code, _, err = self.run_cli([])
+        self.assertEqual(code, 2)
+        self.assertIn("usage:", err)
+        code, _, err = self.run_cli(["bogus"])
+        self.assertEqual(code, 2)
+        self.assertIn("usage:", err)
+        code, _, err = self.run_cli(["snapshot", "--bogus"])
+        self.assertEqual(code, 2)
+        self.assertIn("usage:", err)
+
+    def test_region_equals_flag_form(self):
+        http = self.fake(
+            [
+                ("teamapi.coros.com/account/login", [login_payload()]),
+                ("dayDetail", [day_payload()]),
+                ("activity/query", [activity_payload()]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot", "--region=us"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hrv"], 42)
+        self.assertIn("teamapi.coros.com", [url for url in http.calls if "dayDetail" in url][0])
+
+    def test_watch_invalid_interval_pair_form(self):
+        line = default_snapshot(activity="Run")
+        with (
+            unittest.mock.patch.object(coros, "get_snapshot", return_value=dict(line)),
+            unittest.mock.patch("time.sleep", side_effect=[None, KeyboardInterrupt]),
+        ):
+            code, out, err = self.run_cli(["watch", "--interval", "abc"])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(out.splitlines()), 2)
+        self.assertIn("invalid --interval", err)
+
+    def test_watch_interval_equals_forms(self):
+        line = default_snapshot(activity="Run")
+        with (
+            unittest.mock.patch.object(coros, "get_snapshot", return_value=dict(line)),
+            unittest.mock.patch("time.sleep", side_effect=[None, KeyboardInterrupt]),
+        ):
+            code, _, err = self.run_cli(["watch", "--interval=5"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("invalid", err)
+        with (
+            unittest.mock.patch.object(coros, "get_snapshot", return_value=dict(line)),
+            unittest.mock.patch("time.sleep", side_effect=[None, KeyboardInterrupt]),
+        ):
+            code, out, err = self.run_cli(["watch", "--interval=abc"])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(out.splitlines()), 2)
+        self.assertIn("invalid --interval", err)
+
+    def test_running_as_main_exits_with_main_return(self):
+        out = io.StringIO()
+        err = io.StringIO()
+        with (
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+            unittest.mock.patch.object(sys, "argv", ["coros.py", "logout"]),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                runpy.run_path(_COROS_PATH, run_name="__main__")
+        self.assertEqual(raised.exception.code, 0)
         self.assertEqual(json.loads(out.getvalue())["error"], "auth")
 
 
