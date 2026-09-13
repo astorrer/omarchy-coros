@@ -20,3 +20,7 @@ jobs:
           python-version: "3.12"
       - name: Run unit tests
         run: ./tests/run
+      - name: Install coverage tool
+        run: python3 -m pip install coverage
+      - name: Coverage gate
+        run: ./tests/coverage check

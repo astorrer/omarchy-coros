@@ -69,3 +69,8 @@
 - Agent instruction/dev files (`AGENTS.md`, `PLAN.md`, `opencode.json`,
   `.opencode/`) are untracked and gitignored so they never ship in the
   installed plugin tree.
+- Coverage: `coros.py` (100% lines/branches) and `Model.js` (99.98% bytes)
+  are unit-tested to 98%+ with a `tests/coverage` harness and a CI coverage
+  gate. The QML layer's decision logic (region normalization, refresh-interval
+  math, login-payload clamping) moved into `Model.js` so it is testable
+  headlessly; `setup.sh` behavior is covered at the subprocess level.
