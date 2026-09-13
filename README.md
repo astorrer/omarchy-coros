@@ -62,18 +62,12 @@ Open settings from the gear in the panel, or Omarchy Settings → Bar → COROS:
 
 ## Remove
 
+Use **Sign out** in the panel settings to drop the credentials and token
+cache this plugin wrote, then remove the plugin:
+
 ```sh
 omarchy plugin remove io.github.astorrer.omarchy-coros
 ```
-
-That removes the plugin checkout. To also drop credentials and the token
-cache this plugin wrote:
-
-```sh
-~/.config/omarchy/plugins/io.github.astorrer.omarchy-coros/setup.sh uninstall
-```
-
-Or use **Sign out** in the panel settings before removing the plugin.
 
 ## Troubleshooting
 

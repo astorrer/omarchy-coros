@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Trim marketplace publishing instructions from the README.
+- Drop `setup.sh`: not part of the Omarchy plugin contract and never run at
+  install. Removal uses the panel's Sign out (`coros.py logout`) to clear
+  credentials and the token cache, then `omarchy plugin remove`.
 
 ## 0.1.0 - 2026-09-12
 

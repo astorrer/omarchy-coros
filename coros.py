@@ -138,7 +138,7 @@ def read_config_file():
 
 
 def credentials():
-    """Env wins; the credentials file (written by the panel or setup.sh) is the fallback."""
+    """Env wins; the credentials file (written by the panel) is the fallback."""
     config = read_config_file()
     email = os.environ.get("COROS_EMAIL") or config.get("COROS_EMAIL")
     password = os.environ.get("COROS_PASSWORD") or config.get("COROS_PASSWORD")
