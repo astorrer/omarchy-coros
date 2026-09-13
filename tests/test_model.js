@@ -7,7 +7,7 @@ const source = fs
 
 const Model = new Function(
   source +
-    "; return { parseSnapshot, hrvDelta, isEmpty, authError, networkError, signedIn, formatDelta, regionLabel, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases }"
+    "; return { parseSnapshot, hrvDelta, isEmpty, authError, networkError, signedIn, formatDelta, regionLabel, validRegion, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, refreshIntervalMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, settingValue, loginPayload, snapshotArgs, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases }"
 )()
 
 let failures = 0
@@ -65,6 +65,23 @@ check(Model.formatRefreshLabel(30), "Refresh every 30 min", "label minutes")
 check(Model.formatRefreshLabel(1440), "Refresh every 24 h", "label hours")
 check(Model.regionLabel("us"), "US", "regionLabel us")
 check(Model.regionLabel("eu"), "EU", "regionLabel eu")
+check(Model.validRegion("eu"), "eu", "validRegion eu")
+check(Model.validRegion("us"), "us", "validRegion us")
+check(Model.validRegion("US"), "us", "validRegion upcase")
+check(Model.validRegion(" eu "), "eu", "validRegion trims")
+check(Model.validRegion(""), "eu", "validRegion empty")
+check(Model.validRegion(undefined), "eu", "validRegion undefined")
+check(Model.validRegion(null), "eu", "validRegion null")
+check(Model.validRegion("asia"), "eu", "validRegion garbage")
+check(Model.refreshIntervalMinutes("30", ""), 30, "refresh from min string")
+check(Model.refreshIntervalMinutes("37", ""), 30, "refresh min snapped to step")
+check(Model.refreshIntervalMinutes("abc", "3600"), 60, "refresh falls back to sec")
+check(Model.refreshIntervalMinutes("", "45"), 15, "refresh sec rounds up to a minute")
+check(Model.refreshIntervalMinutes("", ""), 30, "refresh sec absent defaults")
+check(Model.refreshIntervalMinutes("abc", "def"), 30, "refresh both invalid defaults")
+check(Model.refreshIntervalMinutes("-5", ""), 15, "refresh negative clamps")
+check(Model.refreshIntervalMinutes("0", ""), 15, "refresh zero clamps")
+check(Model.refreshIntervalMinutes("", "0"), 30, "refresh sec zero defaults")
 check(Model.formatDelta(-2), "-2", "formatDelta negative")
 check(Model.formatDelta(3.2), "+3", "formatDelta positive")
 check(Model.loadStateLabel(1), "Recovering", "loadState recovering")
@@ -190,6 +207,26 @@ check(Model.parseSnapshot('{"error":"timeout"}').error, "network", "parseSnapsho
 check(Model.parseSnapshot('{"error":1}').error, null, "parseSnapshot non-string error")
 check(Model.parseSnapshot('{"error":null}').error, null, "parseSnapshot json null error")
 check(Model.parseSnapshot('{"hrv":24,"error":"network"}').hrv, 24, "parseSnapshot keeps metrics with network")
+
+check(Model.settingValue({}, "region", "eu"), "eu", "settingValue missing uses fallback")
+check(Model.settingValue({ region: "us" }, "region", "eu"), "us", "settingValue present wins")
+check(Model.settingValue({ region: null }, "region", "eu"), "eu", "settingValue null uses fallback")
+check(Model.settingValue({ region: undefined }, "region", "eu"), "eu", "settingValue undefined uses fallback")
+check(Model.settingValue({ hideWhenNoData: false }, "hideWhenNoData", true), false, "settingValue keeps falsy")
+check(Model.settingValue(null, "region", "eu"), "eu", "settingValue no settings uses fallback")
+
+const longEmail = "a".repeat(300)
+const longPass = "p".repeat(2000)
+const emailClamped = Model.loginPayload(longEmail, "pass", "eu")
+check(JSON.parse(emailClamped).email.length, 254, "loginPayload clamps email to 254 chars")
+check(JSON.parse(emailClamped).email, "a".repeat(254), "loginPayload email exact clamp")
+check(JSON.parse(Model.loginPayload("a@b.c", longPass, "eu")).password.length, 1024, "loginPayload clamps password to 1024 chars")
+check(JSON.parse(Model.loginPayload("a@b.c", "p", "US")).region, "us", "loginPayload normalizes region")
+check(Model.loginPayload("a@b.c", "p", "US"), '{"email":"a@b.c","password":"p","region":"us"}\n', "loginPayload exact json with newline")
+check(Model.loginPayload(undefined, undefined, ""), '{"email":"","password":"","region":"eu"}\n', "loginPayload empty creds")
+check(Model.loginPayload("a@b.c", "p", "eu"), '{"email":"a@b.c","password":"p","region":"eu"}\n', "loginPayload eu region")
+check(Model.snapshotArgs("/opt/omarchy/coros.py", "eu"), ["python3", "/opt/omarchy/coros.py", "snapshot", "--region", "eu"], "snapshotArgs")
+check(Model.snapshotArgs("coros.py", "us"), ["python3", "coros.py", "snapshot", "--region", "us"], "snapshotArgs us region")
 
 if (failures > 0) {
   console.error(`${failures} model checks failed`)

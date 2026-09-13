@@ -438,6 +438,11 @@ function regionLabel(region) {
   return String(region || "").trim().toLowerCase() === "us" ? "US" : "EU"
 }
 
+function validRegion(value) {
+  var r = String(value === undefined || value === null ? "" : value).trim().toLowerCase()
+  return r === "us" ? "us" : "eu"
+}
+
 function clampRefreshMinutes(value) {
   var n = Number(value)
   if (!isFinite(n)) n = REFRESH_DEFAULT_MINUTES
@@ -447,10 +452,35 @@ function clampRefreshMinutes(value) {
   return n
 }
 
+function refreshIntervalMinutes(minRaw, secRaw) {
+  var n = parseInt(String(minRaw), 10)
+  if (Number.isFinite(n)) return clampRefreshMinutes(n)
+  var sec = parseInt(String(secRaw), 10)
+  if (Number.isFinite(sec) && sec > 0) return clampRefreshMinutes(Math.round(sec / 60) || REFRESH_MIN_MINUTES)
+  return REFRESH_DEFAULT_MINUTES
+}
+
 function formatRefreshLabel(minutes) {
   var n = clampRefreshMinutes(minutes)
   if (n >= 60 && n % 60 === 0) return "Refresh every " + (n / 60) + " h"
   return "Refresh every " + n + " min"
+}
+
+function settingValue(settings, name, fallback) {
+  var value = settings ? settings[name] : undefined
+  return value === undefined || value === null ? fallback : value
+}
+
+// Producer-side caps: credentials are clamped before the payload reaches
+// stdin, so coros.py login never buffers an oversized body.
+function loginPayload(email, password, region) {
+  var e = String(email || "").slice(0, 254)
+  var p = String(password || "").slice(0, 1024)
+  return JSON.stringify({ email: e, password: p, region: validRegion(region) }) + "\n"
+}
+
+function snapshotArgs(helperPath, region) {
+  return ["python3", helperPath, "snapshot", "--region", region]
 }
 
 // Compact bar label. One metric so it fits a laptop bar; details live in
