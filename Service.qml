@@ -15,14 +15,8 @@ Item {
   property string _pollRegion: ""
   property bool _signingOut: false
 
-  readonly property int refreshIntervalMin: {
-    var n = parseInt(String(setting("refreshIntervalMin", "")), 10)
-    if (isFinite(n)) return Model.clampRefreshMinutes(n)
-    var sec = parseInt(String(setting("refreshIntervalSec", "")), 10)
-    if (isFinite(sec) && sec > 0) return Model.clampRefreshMinutes(Math.round(sec / 60) || Model.REFRESH_MIN_MINUTES)
-    return Model.REFRESH_DEFAULT_MINUTES
-  }
-  readonly property string region: validRegion(setting("region", "eu"))
+  readonly property int refreshIntervalMin: Model.refreshIntervalMinutes(setting("refreshIntervalMin", ""), setting("refreshIntervalSec", ""))
+  readonly property string region: Model.validRegion(setting("region", "eu"))
   readonly property bool hideWhenNoData: setting("hideWhenNoData", false) === true
   readonly property bool showRecovery: setting("showRecovery", true) !== false
   readonly property bool showLoad: setting("showLoad", true) !== false
@@ -31,17 +25,11 @@ Item {
   readonly property string helperPath: decodeURIComponent(Qt.resolvedUrl("coros.py").toString().replace(/^file:\/\//, ""))
 
   function setting(name, fallback) {
-    var value = settings ? settings[name] : undefined
-    return value === undefined || value === null ? fallback : value
-  }
-
-  function validRegion(value) {
-    var r = String(value === undefined || value === null ? "" : value).trim().toLowerCase()
-    return r === "us" ? "us" : "eu"
+    return Model.settingValue(root.settings, name, fallback)
   }
 
   function snapshotArgs() {
-    return ["python3", helperPath, "snapshot", "--region", region]
+    return Model.snapshotArgs(root.helperPath, root.region)
   }
 
   function poll() {
@@ -62,18 +50,13 @@ Item {
   }
 
   function saveLogin(email, password, region) {
-    var r = validRegion(region)
-    // Producer-side caps: credentials fields are clamped before the payload
-    // reaches stdin, so coros.py login never buffers an oversized body.
-    email = String(email || "").slice(0, 254)
-    password = String(password || "").slice(0, 1024)
     loginBusy = true
     notify("Signing in…")
-    loginProcess.payload = JSON.stringify({ email: email, password: password, region: r }) + "\n"
+    loginProcess.payload = Model.loginPayload(email, password, region)
     loginProcess.stdinEnabled = true
     loginProcess.running = false
     loginProcess.running = true
-    writeSetting("region", r)
+    writeSetting("region", Model.validRegion(region))
   }
 
   function logout() {
