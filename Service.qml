@@ -63,6 +63,10 @@ Item {
 
   function saveLogin(email, password, region) {
     var r = validRegion(region)
+    // Producer-side caps: credentials fields are clamped before the payload
+    // reaches stdin, so coros.py login never buffers an oversized body.
+    email = String(email || "").slice(0, 254)
+    password = String(password || "").slice(0, 1024)
     loginBusy = true
     notify("Signing in…")
     loginProcess.payload = JSON.stringify({ email: email, password: password, region: r }) + "\n"
@@ -130,6 +134,20 @@ Item {
   }
 
   Timer {
+    id: loginTimeout
+    interval: 60000
+    repeat: false
+    onTriggered: {
+      if (loginProcess.running) {
+        loginProcess.signal(9)
+        loginProcess.running = false
+      }
+      root.loginBusy = false
+      root.notify("Sign-in timed out")
+    }
+  }
+
+  Timer {
     id: snapshotTimeout
     interval: 60000
     repeat: false
@@ -173,8 +191,10 @@ Item {
       payload = ""
       // Close the write channel so coros.py login sees EOF (stdin.read / readline).
       stdinEnabled = false
+      loginTimeout.start()
     }
     onExited: {
+      loginTimeout.stop()
       root.loginBusy = false
       var parsed = Model.parseSnapshot(loginStdout.text)
       if (parsed) root.snapshot = parsed

@@ -91,12 +91,18 @@ if [[ -n ${COROS_EMAIL:-} && -n ${COROS_PASSWORD:-} ]]; then
   fi
   mkdir -p "$CONF_DIR"
   chmod 700 "$CONF_DIR"
+  if [[ -L $CREDS ]]; then
+    echo "Refusing to write $CREDS: it is a symlink (not moving creds through it)." >&2
+    exit 1
+  fi
   umask 077
+  tmp="$CREDS.tmp"
   {
     echo "$CREDS_MARK"
     printf "COROS_EMAIL=%s\nCOROS_PASSWORD=%s\nCOROS_REGION=%s\n" "$COROS_EMAIL" "$COROS_PASSWORD" "$region"
-  } > "$CREDS"
-  chmod 600 "$CREDS"
+  } > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$CREDS"
   echo "Wrote $CREDS from the environment."
   if [[ ${OMARCHY_COROS_SETUP_SKIP_LOGIN_TEST:-} == 1 ]]; then
     echo "Skipped login test (OMARCHY_COROS_SETUP_SKIP_LOGIN_TEST=1)."

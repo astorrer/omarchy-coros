@@ -4,3 +4,7 @@ token.json
 credentials
 .cache/
 .worktrees/
+AGENTS.md
+PLAN.md
+opencode.json
+.opencode/

@@ -58,3 +58,14 @@
 - Poll/login live in `Service.qml` (bar keeps polling while the popup is
   closed). Settings has Sign out; `coros.py logout` deletes credentials,
   token cache, and cooldown. Uninstall honors XDG config/cache dirs.
+- Hardening (security review analog): credentials are written through the
+  same `O_NOFOLLOW` + fsync + atomic-replace path as the token cache, so a
+  planted symlink at the predictable path cannot redirect the plaintext
+  password, and `setup.sh` refuses a symlinked credentials file.
+  `coros.py login` reads stdin under a 64 KiB budget (bounded first line,
+  bounded fallback), the panel clamps email/password before the write, and
+  a hung login is SIGKILLed after 60 s like the snapshot poll. Cooldown
+  marker writes are no-follow and a symlinked cooldown is never honored.
+- Agent instruction/dev files (`AGENTS.md`, `PLAN.md`, `opencode.json`,
+  `.opencode/`) are untracked and gitignored so they never ship in the
+  installed plugin tree.

@@ -142,6 +142,27 @@ class SetupInstallTest(unittest.TestCase):
             self.assertNotIn("secret", result.stdout + result.stderr)
             self.assertEqual(stat.S_IMODE(creds.stat().st_mode), 0o600)
 
+    def test_install_refuses_credentials_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            creds = home / ".config" / "omarchy-coros" / "credentials"
+            creds.parent.mkdir(parents=True, exist_ok=True)
+            victim = home / ".config" / "omarchy-coros" / "victim"
+            victim.write_text("sentinel", encoding="utf-8")
+            creds.symlink_to(victim)
+            result = run_setup(
+                home,
+                extra_env={
+                    "COROS_EMAIL": "user@example.com",
+                    "COROS_PASSWORD": "secret",
+                    "COROS_REGION": "us",
+                },
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertTrue(creds.is_symlink())
+            self.assertEqual(victim.read_text(encoding="utf-8"), "sentinel")
+            self.assertIn("symlink", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ object on stdout; watch streams NDJSON.
 import hashlib
 import json
 import os
+import stat
 import sys
 import time
 import urllib.parse
@@ -37,6 +38,7 @@ TOKEN_TTL_MS = 24 * 3600 * 1000
 REQUEST_TIMEOUT_S = 15
 DEFAULT_INTERVAL_S = 30
 MAX_BODY_BYTES = 2 * 1024 * 1024
+LOGIN_BODY_MAX = 64 * 1024  # {email,password,region} from the panel is tiny
 ACTIVITY_NAME_MAX = 120
 ALLOWED_HOSTS = frozenset(urllib.parse.urlparse(url).hostname for url in BASES.values())
 
@@ -162,10 +164,35 @@ def write_credentials(email, password, region):
         + region
         + "\n"
     ).encode("utf-8")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(body)
+    tmp = path + ".tmp"
+    fd = -1
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(tmp, flags, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # rename(2) replaces the directory entry atomically and never follows
+        # a pre-existing symlink at `path`, so a planted link cannot redirect
+        # the write and the plaintext password never lands in a foreign file.
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def cooldown_file():
@@ -174,7 +201,10 @@ def cooldown_file():
 
 def cooldown_active():
     try:
-        age = time.time() - os.stat(cooldown_file()).st_mtime
+        st = os.lstat(cooldown_file())
+        if not stat.S_ISREG(st.st_mode):
+            return False  # planted symlink/dir is never a cooldown
+        age = time.time() - st.st_mtime
         return age >= 0 and age < COOLDOWN_S
     except OSError:
         return False
@@ -184,8 +214,10 @@ def trip_cooldown():
     try:
         parent = os.path.dirname(cooldown_file())
         os.makedirs(parent, mode=0o700, exist_ok=True)
-        with open(cooldown_file(), "w"):
-            pass
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        os.close(os.open(cooldown_file(), flags, 0o600))
     except OSError as exc:
         eprint("coros.py: could not write cooldown marker: " + str(exc))
 
@@ -593,11 +625,32 @@ def resolve_region(flag):
     return conf if conf in BASES else "eu"
 
 
+def _read_bounded(limit):
+    """Read up to `limit` bytes from stdin without buffering past the cap."""
+    chunks = []
+    total = 0
+    while total < limit:
+        chunk = sys.stdin.read(limit - total)
+        if not chunk:
+            break
+        total += len(chunk)
+        chunks.append(chunk)
+    return "".join(chunks)
+
+
 def read_login_body():
-    """One JSON object from stdin. A single line is enough; full-stdin still works."""
-    raw = sys.stdin.readline()
+    """One JSON object from stdin, under a strict byte budget.
+
+    A single line is enough; full-stdin still works. A hostile or stalled
+    producer cannot push an unbounded buffer: the first line is read bounded,
+    the fallback full read stops at LOGIN_BODY_MAX, and anything oversized is
+    treated as an empty body (auth error) rather than buffered.
+    """
+    raw = sys.stdin.readline(LOGIN_BODY_MAX) if hasattr(sys.stdin, "readline") else ""
     if not str(raw).strip():
-        raw = sys.stdin.read()
+        raw = _read_bounded(LOGIN_BODY_MAX)
+    if not str(raw).strip() or len(raw) > LOGIN_BODY_MAX:
+        return {}
     try:
         body = json.loads(raw or "{}")
     except json.JSONDecodeError:

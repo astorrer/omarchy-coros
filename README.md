@@ -116,5 +116,4 @@ ruff check .
 
 `./tests/run` lints, validates `manifest.json` (shape plus settings-schema
 keys), runs the Python unit tests (mocked HTTP, no network), `omarchy plugin
-validate`, and `qmllint`. `coros.py` lives on `feat/api-client`, the QML/JS
-on `feat/ui` — see `PLAN.md` for file ownership.
+validate`, and `qmllint`.

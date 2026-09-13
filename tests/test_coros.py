@@ -498,7 +498,7 @@ class CorosTest(unittest.TestCase):
 
     def test_login_one_json_line_does_not_read_rest_of_stdin(self):
         class LineStdin:
-            def readline(self):
+            def readline(self, size=-1):
                 return json.dumps({"email": "user@example.com", "password": "secret", "region": "eu"}) + "\n"
 
             def read(self, *args):
@@ -761,6 +761,79 @@ class CorosTest(unittest.TestCase):
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["activity"], "R" * 120)
+
+    def test_login_refuses_credentials_symlink(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            conf = os.path.join(self.tmp.name, "omarchy-coros")
+            os.makedirs(conf, mode=0o700, exist_ok=True)
+            victim = os.path.join(conf, "victim")
+            with open(victim, "w") as handle:
+                handle.write("sentinel")
+            os.symlink(victim, self.creds_path())
+            self.fake(full_routes())
+            payload = json.dumps({"email": "user@example.com", "password": "secret", "region": "eu"})
+            code, out, err = self.run_cli(["login"], stdin_text=payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["error"], None)
+        with open(victim) as handle:
+            self.assertEqual(handle.read(), "sentinel")
+        self.assertFalse(os.path.islink(self.creds_path()))
+        with open(self.creds_path()) as handle:
+            self.assertIn(coros.CREDS_MARK, handle.read())
+        self.assertEqual(os.stat(self.creds_path()).st_mode & 0o777, 0o600)
+
+    def test_trip_cooldown_refuses_symlink(self):
+        cache = os.path.join(self.tmp.name, "omarchy-coros")
+        os.makedirs(cache, mode=0o700, exist_ok=True)
+        target = os.path.join(cache, "victim")
+        with open(target, "w") as handle:
+            handle.write("sentinel")
+        os.symlink(target, coros.cooldown_file())
+        coros.trip_cooldown()
+        self.assertFalse(coros.cooldown_active())
+        with open(target) as handle:
+            self.assertEqual(handle.read(), "sentinel")
+
+    def test_login_oversized_stdin_is_auth_error(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            class HugeStdin:
+                def readline(self, size=-1):
+                    return "x" * (coros.LOGIN_BODY_MAX + 1)  # ignores the size hint
+
+                def read(self, *args):
+                    return ""
+
+            out = io.StringIO()
+            err = io.StringIO()
+            with (
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+                unittest.mock.patch.object(sys, "stdin", HugeStdin()),
+            ):
+                code = coros.main(["login"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["error"], "auth")
+        self.assertFalse(os.path.exists(self.creds_path()))
+
+    def test_login_blank_line_huge_fallback_is_auth_error(self):
+        with unittest.mock.patch.dict(os.environ, {"COROS_EMAIL": "", "COROS_PASSWORD": ""}):
+            class HugeFallback:
+                def readline(self, size=-1):
+                    return ""
+
+                def read(self, size=-1):
+                    return "y" * (size + 1)  # returns more than asked
+
+            out = io.StringIO()
+            err = io.StringIO()
+            with (
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+                unittest.mock.patch.object(sys, "stdin", HugeFallback()),
+            ):
+                code = coros.main(["login"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["error"], "auth")
 
 
 if __name__ == "__main__":
