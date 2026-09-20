@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Marketplace security fixes: panel-launched `coros.py` helpers now run
+  `/usr/bin/python3` over a fixed system PATH with a cleared environment
+  (only HOME/XDG bases), so a planted `python3` on a user-writable PATH can
+  no longer receive the login password, and ambient `COROS_EMAIL` /
+  `COROS_PASSWORD` no longer reach the widget's helpers (env credentials
+  stay a deliberate terminal CLI behavior).
 - Trim marketplace publishing instructions from the README.
 - Drop `setup.sh`: not part of the Omarchy plugin contract and never run at
   install. Removal uses the panel's Sign out (`coros.py logout`) to clear

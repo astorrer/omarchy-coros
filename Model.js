@@ -479,8 +479,26 @@ function loginPayload(email, password, region) {
   return JSON.stringify({ email: e, password: p, region: validRegion(region) }) + "\n"
 }
 
+// Panel-launched helpers require a fixed interpreter over a fixed system
+// PATH and an explicit minimal environment: the login password travels on
+// stdin, so neither the interpreter nor the helper's surroundings may be
+// resolvable or inheritable from the ambient session (marketplace review).
+var HELPER_INTERPRETER = "/usr/bin/python3"
+var HELPER_SYSTEM_PATH = "/usr/local/bin:/usr/bin"
+
+// Minimal environment for coros.py: a fixed PATH, HOME, and the XDG bases
+// the helper actually reads. Ambient variables, including COROS_EMAIL /
+// COROS_PASSWORD, do not cross this boundary; env credentials stay a
+// deliberate terminal CLI behavior.
+function helperEnvironment(home, cacheHome, configHome) {
+  var env = { PATH: HELPER_SYSTEM_PATH, HOME: home }
+  if (cacheHome) env.XDG_CACHE_HOME = cacheHome
+  if (configHome) env.XDG_CONFIG_HOME = configHome
+  return env
+}
+
 function snapshotArgs(helperPath, region) {
-  return ["python3", helperPath, "snapshot", "--region", region]
+  return [HELPER_INTERPRETER, helperPath, "snapshot", "--region", region]
 }
 
 // Compact bar label. One metric so it fits a laptop bar; details live in

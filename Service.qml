@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
@@ -23,6 +24,10 @@ Item {
   readonly property bool showActivity: setting("showActivity", true) !== false
   readonly property string barMetric: Model.validBarMetric(setting("barMetric", "hrv"))
   readonly property string helperPath: decodeURIComponent(Qt.resolvedUrl("coros.py").toString().replace(/^file:\/\//, ""))
+  readonly property var helperEnv: Model.helperEnvironment(
+    Quickshell.env("HOME"),
+    Quickshell.env("XDG_CACHE_HOME"),
+    Quickshell.env("XDG_CONFIG_HOME"))
 
   function setting(name, fallback) {
     return Model.settingValue(root.settings, name, fallback)
@@ -148,6 +153,8 @@ Item {
     id: snapshotProcess
     running: false
     command: root.snapshotArgs()
+    clearEnvironment: true
+    environment: root.helperEnv
     stdout: StdioCollector {
       id: snapshotStdout
       waitForEnd: true
@@ -164,7 +171,9 @@ Item {
     running: false
     stdinEnabled: true
     property string payload: ""
-    command: ["python3", root.helperPath, "login"]
+    command: [Model.HELPER_INTERPRETER, root.helperPath, "login"]
+    clearEnvironment: true
+    environment: root.helperEnv
     stdout: StdioCollector {
       id: loginStdout
       waitForEnd: true
@@ -189,7 +198,9 @@ Item {
   Process {
     id: logoutProcess
     running: false
-    command: ["python3", root.helperPath, "logout"]
+    command: [Model.HELPER_INTERPRETER, root.helperPath, "logout"]
+    clearEnvironment: true
+    environment: root.helperEnv
     stdout: StdioCollector {
       waitForEnd: true
     }

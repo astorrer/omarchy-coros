@@ -11,7 +11,9 @@ metrics as JSON for the bar widget to poll:
 
 Credentials come from COROS_EMAIL / COROS_PASSWORD, or from the credentials
 file (~/.config/omarchy-coros/credentials, mode 0600) written by the panel
-login. The password is stored in that file so 24h token refresh can log in
+login. The panel launches helpers with a cleared environment, so the ambient
+variables only apply to deliberate terminal invocations of this CLI.
+The password is stored in that file so 24h token refresh can log in
 again; the access token is cached separately in
 ~/.cache/omarchy-coros/token.json (mode 0600, 24h TTL). After logins fail
 on both regions, further polls back off for an hour so a widget polling on

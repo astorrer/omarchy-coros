@@ -7,7 +7,7 @@ const source = fs
 
 const Model = new Function(
   source +
-    "; return { parseSnapshot, hrvDelta, isEmpty, authError, networkError, signedIn, formatDelta, regionLabel, validRegion, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, refreshIntervalMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, settingValue, loginPayload, snapshotArgs, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases }"
+    "; return { parseSnapshot, hrvDelta, isEmpty, authError, networkError, signedIn, formatDelta, regionLabel, validRegion, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, refreshIntervalMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, settingValue, loginPayload, snapshotArgs, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, HELPER_INTERPRETER, HELPER_SYSTEM_PATH, helperEnvironment, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases }"
 )()
 
 let failures = 0
@@ -225,8 +225,12 @@ check(JSON.parse(Model.loginPayload("a@b.c", "p", "US")).region, "us", "loginPay
 check(Model.loginPayload("a@b.c", "p", "US"), '{"email":"a@b.c","password":"p","region":"us"}\n', "loginPayload exact json with newline")
 check(Model.loginPayload(undefined, undefined, ""), '{"email":"","password":"","region":"eu"}\n', "loginPayload empty creds")
 check(Model.loginPayload("a@b.c", "p", "eu"), '{"email":"a@b.c","password":"p","region":"eu"}\n', "loginPayload eu region")
-check(Model.snapshotArgs("/opt/omarchy/coros.py", "eu"), ["python3", "/opt/omarchy/coros.py", "snapshot", "--region", "eu"], "snapshotArgs")
-check(Model.snapshotArgs("coros.py", "us"), ["python3", "coros.py", "snapshot", "--region", "us"], "snapshotArgs us region")
+check(Model.snapshotArgs("/opt/omarchy/coros.py", "eu"), [Model.HELPER_INTERPRETER, "/opt/omarchy/coros.py", "snapshot", "--region", "eu"], "snapshotArgs")
+check(Model.snapshotArgs("coros.py", "us"), [Model.HELPER_INTERPRETER, "coros.py", "snapshot", "--region", "us"], "snapshotArgs us region")
+check(Model.HELPER_INTERPRETER, "/usr/bin/python3", "helper interpreter is fixed path")
+check(Model.HELPER_SYSTEM_PATH, "/usr/local/bin:/usr/bin", "helper PATH is fixed")
+check(Model.helperEnvironment("/h", "/c", "/cfg"), { PATH: Model.HELPER_SYSTEM_PATH, HOME: "/h", XDG_CACHE_HOME: "/c", XDG_CONFIG_HOME: "/cfg" }, "helperEnvironment passes XDG bases")
+check(Model.helperEnvironment("/h", null, ""), { PATH: Model.HELPER_SYSTEM_PATH, HOME: "/h" }, "helperEnvironment omits empty XDG")
 
 check(Model.parseSnapshot(""), null, "parseSnapshot empty raw")
 check(Model.parseSnapshot('{"error":""}').error, null, "parseSnapshot blank error is null")
