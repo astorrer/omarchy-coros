@@ -416,7 +416,10 @@ function metricGroups(snapshot, groups) {
         hint: recoveryEtaText(snapshot.recoveryHours),
         steps: 5,
         step: readinessStep(readiness),
-        tone: readinessTone(readiness)
+        tone: readinessTone(readiness),
+        lo: 0,
+        hi: 100,
+        pos: readiness
       })
     }
   }

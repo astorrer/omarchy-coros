@@ -86,6 +86,17 @@ Panel {
   readonly property bool predictShown: groups.predict.length > 0
   readonly property bool recoveryShown: showRecovery && (groups.recovery.length > 0 || hrvBand !== null)
   readonly property bool loadShown: showLoad && (groups.load.length > 0 || groups.bars.length > 0)
+  readonly property var planRows: {
+    var out = []
+    var rows = groups.today
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === "plan") out.push(rows[i])
+    return out
+  }
+  readonly property var readinessRow: {
+    var rows = groups.today
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === "readiness") return rows[i]
+    return null
+  }
 
   function toneColor(tone) {
     if (tone === "good") return Color.accent
@@ -534,6 +545,120 @@ Panel {
     }
   }
 
+  component ReadinessShowcase: Column {
+    id: showcase
+    property var row: null
+    visible: row !== null
+    width: parent ? parent.width : 0
+    spacing: Style.space(4)
+    readonly property color ink: root.toneColor(row ? row.tone : "neutral")
+    readonly property real pct: row && row.pos !== null && row.pos !== undefined ? Math.max(0, Math.min(100, Number(row.pos))) : 0
+    readonly property bool charging: row ? row.hint !== "" && row.hint !== "Fully recovered" : false
+    readonly property bool live: root.opened && root.view === "main" && !root.showLogin
+
+    RowLayout {
+      width: parent.width
+      spacing: Style.space(10)
+
+      Text {
+        id: batteryGlyph
+        text: showcase.row ? showcase.row.icon : ""
+        color: showcase.ink
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.display
+        font.bold: true
+        Layout.alignment: Qt.AlignVCenter
+        Behavior on color { ColorAnimation { duration: 220 } }
+        transformOrigin: Item.Center
+        SequentialAnimation on scale {
+          running: showcase.charging && showcase.live
+          loops: Animation.Infinite
+          alwaysRunToEnd: true
+          NumberAnimation { to: 1.1; duration: 640; easing.type: Easing.InOutSine }
+          NumberAnimation { to: 1.0; duration: 640; easing.type: Easing.InOutSine }
+          onRunningChanged: if (!running) batteryGlyph.scale = 1
+        }
+      }
+
+      Text {
+        text: showcase.row ? showcase.row.value : ""
+        color: showcase.ink
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.displayLarge
+        font.bold: true
+        Layout.alignment: Qt.AlignVCenter
+        Behavior on color { ColorAnimation { duration: 220 } }
+      }
+
+      Text {
+        visible: text !== ""
+        text: (showcase.row ? showcase.row.hint : "").toUpperCase()
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+        font.letterSpacing: 1.2
+        elide: Text.ElideRight
+        Layout.fillWidth: true
+        Layout.alignment: Qt.AlignVCenter
+        horizontalAlignment: Text.AlignRight
+      }
+    }
+
+    Item {
+      width: parent.width
+      height: Style.space(8)
+
+      Rectangle {
+        anchors.fill: parent
+        radius: height / 2
+        color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.12)
+      }
+
+      Rectangle {
+        width: Math.round((showcase.pct / 100) * parent.width)
+        height: parent.height
+        radius: height / 2
+        color: showcase.ink
+        Behavior on width { NumberAnimation { duration: 480; easing.type: Easing.OutCubic } }
+        Behavior on color { ColorAnimation { duration: 220 } }
+      }
+
+      Rectangle {
+        visible: showcase.pct > 0
+        x: parent.width * 0.75 - 0.5
+        width: 1
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        color: root.barForeground
+        opacity: 0.45
+      }
+    }
+
+    Row {
+      width: parent.width
+      spacing: Style.space(8)
+
+      StepMeter {
+        count: 5
+        step: showcase.row ? showcase.row.step : 0
+        tone: showcase.row ? showcase.row.tone : "neutral"
+        live: showcase.live
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        text: "READINESS"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+        font.letterSpacing: 1.2
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
+  }
+
   component MetricTile: Item {
     id: tile
     property string icon: ""
@@ -946,7 +1071,7 @@ Panel {
             }
 
             Repeater {
-              model: root.groups.today
+              model: root.planRows
               MetricTile {
                 required property var modelData
                 width: parent.width
@@ -957,8 +1082,12 @@ Panel {
                 steps: modelData.steps
                 step: modelData.step
                 tone: modelData.tone
-                marquee: modelData.id === "plan"
+                marquee: true
               }
+            }
+
+            ReadinessShowcase {
+              row: root.readinessRow
             }
           }
 
