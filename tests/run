@@ -73,6 +73,7 @@ check(
         "showActivity",
         "showLoad",
         "showRecovery",
+        "showToday",
     ],
     "schema keys must stay in sync with the QML settings",
 )
@@ -92,7 +93,7 @@ check(region.get("defaultValue") == "eu" and defaults["region"] == "eu", "region
 hide = by_key["hideWhenNoData"]
 check(hide["type"] == "boolean", "hideWhenNoData must be boolean")
 check(hide.get("defaultValue") is False and defaults["hideWhenNoData"] is False, "hideWhenNoData default must be false")
-for key in ("showRecovery", "showLoad", "showActivity"):
+for key in ("showToday", "showRecovery", "showLoad", "showActivity"):
     item = by_key[key]
     check(item["type"] == "boolean", f"{key} must be boolean")
     check(item.get("defaultValue") is True and defaults[key] is True, f"{key} default must be true")

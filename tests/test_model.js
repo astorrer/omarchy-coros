@@ -7,7 +7,7 @@ const source = fs
 
 const Model = new Function(
   source +
-    "; return { parseSnapshot, hrvDelta, isEmpty, authError, networkError, signedIn, formatDelta, regionLabel, validRegion, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, refreshIntervalMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, settingValue, loginPayload, snapshotArgs, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, HELPER_INTERPRETER, HELPER_SYSTEM_PATH, helperEnvironment, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases }"
+    "; return { parseSnapshot, hrvDelta, isEmpty, authError, networkError, signedIn, formatDelta, regionLabel, validRegion, formatDay, loadStateLabel, fatigueStateLabel, metricRows, metricGroups, validBarMetric, formatBar, clampRefreshMinutes, refreshIntervalMinutes, formatRefreshLabel, formatSnapshot, formatTooltip, settingValue, loginPayload, snapshotArgs, PLUGIN_VERSION, REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES, REFRESH_DEFAULT_MINUTES, REFRESH_STEP_MINUTES, HELPER_INTERPRETER, HELPER_SYSTEM_PATH, helperEnvironment, ICON, activityIcon, fatigueIcon, hrvRange, formatTick, hrvTone, fatigueTone, loadTone, weekTone, heroMood, heroPhrases, formatRace, formatRaceShort, bestRace, RACE_ORDER, readinessTone, readinessStep, readinessIcon, recoveryEtaText }"
 )()
 
 let failures = 0
@@ -122,7 +122,7 @@ check(rows[1].tone, "good", "fresh is good")
 check(rows[1].steps, 5, "row fatigue steps")
 check(rows[1].step, 1, "row fatigue step")
 check(rows[2].label, "Balance", "row balance")
-check(rows[3].label, "Today", "row daily load")
+check(rows[3].label, "Daily", "row daily load")
 check(rows[3].value, "0", "row daily load zero")
 check(rows[4].label, "7 / 28 day", "rolling load combined")
 check(rows[4].value, "24 · 238", "rolling load values")
@@ -279,8 +279,8 @@ check(Model.formatTooltip({ day: null, hrv: null, rhr: null, load: null, load7d:
 check(Model.formatTooltip({ activity: "Morning Run", error: null, hrv: null, rhr: null, load: null, load7d: null, fatigueState: null, day: null }), "COROS — Morning Run", "tooltip activity without day")
 check(Model.formatTooltip({ hrv: Symbol("x") }), "COROS", "tooltip protects against throw")
 
-check(Model.metricGroups(null), { recovery: [], load: [], bars: [], activity: [] }, "metricGroups unsigned is empty")
-check(Model.metricGroups({ error: "auth" }), { recovery: [], load: [], bars: [], activity: [] }, "metricGroups auth is empty")
+check(Model.metricGroups(null), { recovery: [], load: [], bars: [], activity: [], today: [], predict: [] }, "metricGroups unsigned is empty")
+check(Model.metricGroups({ error: "auth" }), { recovery: [], load: [], bars: [], activity: [], today: [], predict: [] }, "metricGroups auth is empty")
 let noRatio = {
   error: null, hrvBandLow: null, hrvBandHigh: null, hrv: null, hrvBaseline: null, testRhr: null,
   rhr: 61, balance: 0, fatigue: 25, fatigueState: null, load: 3, load7d: 24, load28d: 238,
@@ -322,6 +322,151 @@ let noDay = {
 let gNoDay = Model.metricGroups(noDay)
 check(gNoDay.activity.length, 1, "groups activity row without day")
 check(gNoDay.activity[0].label, "Last activity", "groups activity without day")
+
+const todaySnap = {
+  hrv: 24, hrvBaseline: 26, hrvBandLow: 22, hrvBandHigh: 30, rhr: 61, testRhr: 64,
+  load: 40, load7d: 24, load28d: 238, loadRatio: 0.8, loadState: 2, loadWeek: 18,
+  loadWeekMin: 210, loadWeekMax: 315, ati: 5, cti: 30, balance: 25, fatigue: -25, fatigueState: 1,
+  readiness: 82, recoveryHours: 6.5, race5k: 1172, race10k: 2458, raceHalf: 5464, raceMarathon: 12084,
+  plan: "Tempo Run", planKm: 8, planMin: 46,
+  activity: "Run 10k", activityDay: "2026-09-07", day: "2026-09-10", error: null
+}
+
+check(Model.formatRace(1172), "19:32", "formatRace minutes")
+check(Model.formatRace(2458), "40:58", "formatRace just under an hour")
+check(Model.formatRace(5464), "1:31:04", "formatRace over an hour")
+check(Model.formatRace(12084), "3:21:24", "formatRace marathon")
+check(Model.formatRace(null), "", "formatRace null")
+check(Model.formatRace(0), "", "formatRace zero")
+check(Model.formatRace(-5), "", "formatRace negative")
+check(Model.formatRaceShort(1172), "19:32", "formatRaceShort minutes")
+check(Model.formatRaceShort(2458), "40:58", "formatRaceShort seconds kept")
+check(Model.formatRaceShort(5464), "1:31", "formatRaceShort hour minutes")
+check(Model.formatRaceShort(12084), "3:21", "formatRaceShort marathon")
+check(Model.formatRaceShort(null), "", "formatRaceShort null")
+check(Model.bestRace(todaySnap).spec.short, "M", "bestRace prefers the marathon")
+check(Model.bestRace({ race5k: 1172, error: null }).spec.short, "5K", "bestRace falls back to 5K")
+check(Model.bestRace({ raceHalf: 5464, error: null }).spec.short, "HM", "bestRace half")
+check(Model.bestRace({ error: null }), null, "bestRace none")
+check(Model.bestRace(null), null, "bestRace null snapshot")
+check(Model.readinessTone(82), "good", "readinessTone good")
+check(Model.readinessTone(75), "good", "readinessTone good edge")
+check(Model.readinessTone(40), "bad", "readinessTone bad edge")
+check(Model.readinessTone(41), "neutral", "readinessTone neutral")
+check(Model.readinessTone(null), "neutral", "readinessTone null")
+check(Model.readinessStep(82), 5, "readinessStep full")
+check(Model.readinessStep(1), 1, "readinessStep floor is one dot")
+check(Model.readinessStep(0), 1, "readinessStep zero still one dot")
+check(Model.readinessStep(100), 5, "readinessStep caps at five")
+check(Model.readinessStep(null), 0, "readinessStep null is zero")
+check(Model.readinessIcon(82), Model.ICON.batteryFull, "readinessIcon full")
+check(Model.readinessIcon(79), Model.ICON.battery80, "readinessIcon eighty")
+check(Model.readinessIcon(60), Model.ICON.battery80, "readinessIcon eighty edge")
+check(Model.readinessIcon(59), Model.ICON.battery50, "readinessIcon fifty")
+check(Model.readinessIcon(40), Model.ICON.battery50, "readinessIcon fifty edge")
+check(Model.readinessIcon(20), Model.ICON.battery20, "readinessIcon twenty")
+check(Model.readinessIcon(19), Model.ICON.batteryEmpty, "readinessIcon empty")
+check(Model.readinessIcon(null), Model.ICON.battery50, "readinessIcon null")
+check(Model.recoveryEtaText(null), "", "recoveryEta null")
+check(Model.recoveryEtaText(0), "Fully recovered", "recoveryEta zero is done")
+check(Model.recoveryEtaText(-1), "Fully recovered", "recoveryEta negative is done")
+check(Model.recoveryEtaText(0.5), "Full in 30 min", "recoveryEta sub-hour minutes")
+check(Model.recoveryEtaText(0.01), "Full in 1 min", "recoveryEta tiny is one minute")
+check(Model.recoveryEtaText(1), "Full in 1 h", "recoveryEta whole hour")
+check(Model.recoveryEtaText(6.5), "Full in 6½ h", "recoveryEta half")
+check(Model.recoveryEtaText(6.25), "Full in 6¼ h", "recoveryEta quarter")
+check(Model.recoveryEtaText(6.75), "Full in 6¾ h", "recoveryEta three quarters")
+check(Model.recoveryEtaText(6.9), "Full in 7 h", "recoveryEta rounds up")
+check(Model.recoveryEtaText(2), "Full in 2 h", "recoveryEta two hours")
+
+let gToday = Model.metricGroups(todaySnap)
+check(gToday.today.length, 2, "today tiles plan and readiness")
+check(gToday.today[0].id, "plan", "today plan id")
+check(gToday.today[0].label, "Today's plan", "today plan label")
+check(gToday.today[0].value, "Tempo Run · 8 km · 46 min", "today plan value")
+check(gToday.today[0].icon, Model.ICON.activity, "today plan icon from name")
+check(gToday.today[1].id, "readiness", "today readiness id")
+check(gToday.today[1].value, "82%", "today readiness value")
+check(gToday.today[1].hint, "Full in 6½ h", "today readiness hint is the eta")
+check(gToday.today[1].step, 5, "today readiness step")
+check(gToday.today[1].tone, "good", "today readiness tone")
+check(gToday.today[1].lo, 0, "today readiness range lo")
+check(gToday.today[1].hi, 100, "today readiness range hi")
+check(gToday.today[1].pos, 82, "today readiness pos")
+check(gToday.predict.length, 4, "predict tiles")
+check(gToday.predict[0].label, "5K", "predict 5k label")
+check(gToday.predict[0].value, "19:32", "predict 5k value")
+check(gToday.predict[1].value, "40:58", "predict 10k value")
+check(gToday.predict[2].value, "1:31:04", "predict half value")
+check(gToday.predict[3].label, "Marathon", "predict marathon label")
+check(gToday.predict[3].value, "3:21:24", "predict marathon value")
+check(gToday.predict[3].icon, Model.ICON.activity, "predict uses the run glyph")
+let gMutedToday = Model.metricGroups(todaySnap, { today: false })
+check(gMutedToday.today.length, 0, "today group mutes")
+check(gMutedToday.predict.length, 4, "predict stays on")
+let gBarePlan = Model.metricGroups({ plan: "Easy Jog", error: null })
+check(gBarePlan.today.length, 1, "plan without extras still shows")
+check(gBarePlan.today[0].value, "Easy Jog", "plan value bare")
+let gNoHours = Model.metricGroups({ readiness: 55, error: null })
+check(gNoHours.today[0].hint, "", "readiness without hours has no hint")
+let gPartialRaces = Model.metricGroups({ race10k: 2458, raceMarathon: 12084, error: null })
+check(gPartialRaces.predict.length, 2, "predict only known races")
+check(gPartialRaces.predict[1].id, "raceMarathon", "predict keeps race order")
+
+let todayRows = Model.metricRows(todaySnap)
+check(todayRows.length, 15, "rows include today and predict")
+check(todayRows[0].id, "plan", "rows plan first")
+check(todayRows[1].id, "readiness", "rows readiness second")
+check(todayRows[2].label, "Resting HR", "rows recovery follows")
+check(todayRows[10].id, "race5k", "rows predict after bars")
+check(todayRows[14].id, "activity", "rows activity last")
+check(Model.metricRows(todaySnap, { today: false }).length, 13, "rows honor today gate")
+
+check(Model.validBarMetric("readiness"), "readiness", "validBarMetric readiness")
+check(Model.validBarMetric("RACE"), "race", "validBarMetric race")
+check(Model.formatBar(todaySnap, "readiness"), "Ready 82%", "formatBar readiness")
+check(Model.formatBar(todaySnap, "race"), "M 3:21", "formatBar race marathon")
+check(Model.formatBar({ race5k: 1172, error: null }, "race"), "5K 19:32", "formatBar race 5k fallback")
+check(Model.formatBar({ raceHalf: 5464, error: null }, "race"), "HM 1:31", "formatBar race half")
+check(Model.formatBar({ hrv: 24, error: null }, "race"), "HRV 24", "formatBar race falls through when empty")
+check(Model.formatBar({ hrv: 24, error: null }, "readiness"), "HRV 24", "formatBar readiness falls through")
+
+const parsedToday = Model.parseSnapshot(
+  JSON.stringify({ readiness: 82, recoveryHours: 6.5, race5k: 1172, race10k: 2458, raceHalf: 5464, raceMarathon: 12084, plan: "Tempo Run", planKm: 8, planMin: 46, error: null })
+)
+check(parsedToday.readiness, 82, "parseSnapshot readiness")
+check(parsedToday.recoveryHours, 6.5, "parseSnapshot recoveryHours")
+check(parsedToday.race5k, 1172, "parseSnapshot race5k")
+check(parsedToday.raceMarathon, 12084, "parseSnapshot raceMarathon")
+check(parsedToday.plan, "Tempo Run", "parseSnapshot plan")
+check(parsedToday.planKm, 8, "parseSnapshot planKm")
+check(parsedToday.planMin, 46, "parseSnapshot planMin")
+check(Model.parseSnapshot('{"plan":"  "}').plan, null, "parseSnapshot blank plan is null")
+check(Model.parseSnapshot('{"plan":42}').plan, "42", "parseSnapshot stringifies plan")
+check(Model.parseSnapshot('{"planKm":"8"}').planKm, 8, "parseSnapshot numeric string planKm")
+check(Model.parseSnapshot('{"readiness":null,"plan":null,"raceMarathon":null}').readiness, null, "parseSnapshot null readiness")
+
+check(Model.isEmpty({ hrv: null, hrvBaseline: null, rhr: null, load: null, load7d: null, fatigue: null, readiness: 82, raceMarathon: null, plan: null, activity: null, error: null }), false, "isEmpty readiness is data")
+check(Model.isEmpty({ hrv: null, hrvBaseline: null, rhr: null, load: null, load7d: null, fatigue: null, readiness: null, raceMarathon: 12084, plan: null, activity: null, error: null }), false, "isEmpty race is data")
+check(Model.isEmpty({ hrv: null, hrvBaseline: null, rhr: null, load: null, load7d: null, fatigue: null, readiness: null, raceMarathon: null, plan: "Tempo Run", activity: null, error: null }), false, "isEmpty plan is data")
+check(Model.isEmpty({ hrv: null, hrvBaseline: null, rhr: null, load: null, load7d: null, fatigue: null, readiness: null, raceMarathon: null, plan: null, activity: null, error: null }), true, "isEmpty all null stays empty")
+
+check(Model.heroPhrases(todaySnap).indexOf("Readiness 82%") >= 0, true, "hero readiness phrase")
+check(Model.heroPhrases(todaySnap).indexOf("Today · Tempo Run 8 km") >= 0, true, "hero plan phrase")
+check(Model.heroPhrases({ error: "auth" }), [], "heroPhrases idle stays empty")
+check(Model.heroPhrases({ hrv: null, error: null }).length, 0, "heroPhrases empty snapshot no extras")
+
+check(
+  Model.formatTooltip(todaySnap),
+  "COROS — Sep 10 · HRV 24 (-2) · RHR 61 · Load 40 · 7d 24 · Ready 82% · Full in 6½ h · Today Tempo Run 8 km · Fresh · Run 10k (Sep 7)",
+  "tooltip includes readiness and plan"
+)
+check(
+  Model.formatTooltip({ readiness: 82, recoveryHours: 0, error: null, day: null, hrv: null, rhr: null, load: null, load7d: null, fatigueState: null, activity: null }),
+  "COROS — Ready 82% · Fully recovered",
+  "tooltip readiness without eta tail"
+)
+check(Model.RACE_ORDER.length, 4, "race order covers the four distances")
 
 if (failures > 0) {
   console.error(`${failures} model checks failed`)

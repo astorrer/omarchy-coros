@@ -25,8 +25,8 @@ Panel {
   property int metricIndex: 1
   property int intervalIndex: 0
   readonly property var loginRegions: ["us", "eu"]
-  readonly property var barMetrics: ["icon", "hrv", "rhr", "load", "fatigue"]
-  readonly property var settingsSections: ["back", "metric", "hide", "interval", "overnight", "load", "activity", "account", "signout"]
+  readonly property var barMetrics: ["icon", "hrv", "rhr", "load", "fatigue", "readiness", "race"]
+  readonly property var settingsSections: ["back", "metric", "hide", "interval", "today", "overnight", "load", "activity", "account", "signout"]
 
   property var client: null
   readonly property var snapshot: client ? client.snapshot : null
@@ -58,6 +58,7 @@ Panel {
   readonly property bool showRecovery: !client || client.showRecovery
   readonly property bool showLoad: !client || client.showLoad
   readonly property bool showActivity: !client || client.showActivity
+  readonly property bool showToday: !client || client.showToday
   readonly property string hrvToneName: snapshot ? Model.hrvTone(snapshot) : "neutral"
   readonly property string heroMood: snapshot ? Model.heroMood(snapshot) : "idle"
   readonly property var heroPhraseList: snapshot ? Model.heroPhrases(snapshot) : []
@@ -78,8 +79,24 @@ Panel {
   readonly property var groups: Model.metricGroups(snapshot, {
     recovery: showRecovery,
     load: showLoad,
-    activity: showActivity
+    activity: showActivity,
+    today: showToday
   })
+  readonly property bool todayShown: showToday && groups.today.length > 0
+  readonly property bool predictShown: groups.predict.length > 0
+  readonly property bool recoveryShown: showRecovery && (groups.recovery.length > 0 || hrvBand !== null)
+  readonly property bool loadShown: showLoad && (groups.load.length > 0 || groups.bars.length > 0)
+  readonly property var planRows: {
+    var out = []
+    var rows = groups.today
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === "plan") out.push(rows[i])
+    return out
+  }
+  readonly property var readinessRow: {
+    var rows = groups.today
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === "readiness") return rows[i]
+    return null
+  }
 
   function toneColor(tone) {
     if (tone === "good") return Color.accent
@@ -246,6 +263,8 @@ Panel {
         if (client) client.writeSetting("hideWhenNoData", !client.hideWhenNoData)
       } else if (focusSection === "interval") {
         bumpRefresh(intervalIndex === 0 ? -1 : 1)
+      } else if (focusSection === "today") {
+        if (client) client.writeSetting("showToday", !client.showToday)
       } else if (focusSection === "overnight") {
         if (client) client.writeSetting("showRecovery", !client.showRecovery)
       } else if (focusSection === "load") {
@@ -277,9 +296,12 @@ Panel {
   }
 
   onHeroMoodChanged: phraseIndex = 0
+  onViewChanged: Qt.callLater(root.syncCardHeight)
   onOpenedChanged: if (opened) {
     cursorActive = false
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+    Qt.callLater(root.syncCardHeight)
+    fontSettle.restart()
   }
 
   Timer {
@@ -526,6 +548,120 @@ Panel {
     }
   }
 
+  component ReadinessShowcase: Column {
+    id: showcase
+    property var row: null
+    visible: row !== null
+    width: parent ? parent.width : 0
+    spacing: Style.space(4)
+    readonly property color ink: root.toneColor(row ? row.tone : "neutral")
+    readonly property real pct: row && row.pos !== null && row.pos !== undefined ? Math.max(0, Math.min(100, Number(row.pos))) : 0
+    readonly property bool charging: row ? row.hint !== "" && row.hint !== "Fully recovered" : false
+    readonly property bool live: root.opened && root.view === "main" && !root.showLogin
+
+    RowLayout {
+      width: parent.width
+      spacing: Style.space(10)
+
+      Text {
+        id: batteryGlyph
+        text: showcase.row ? showcase.row.icon : ""
+        color: showcase.ink
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.display
+        font.bold: true
+        Layout.alignment: Qt.AlignVCenter
+        Behavior on color { ColorAnimation { duration: 220 } }
+        transformOrigin: Item.Center
+        SequentialAnimation on scale {
+          running: showcase.charging && showcase.live
+          loops: Animation.Infinite
+          alwaysRunToEnd: true
+          NumberAnimation { to: 1.1; duration: 640; easing.type: Easing.InOutSine }
+          NumberAnimation { to: 1.0; duration: 640; easing.type: Easing.InOutSine }
+          onRunningChanged: if (!running) batteryGlyph.scale = 1
+        }
+      }
+
+      Text {
+        text: showcase.row ? showcase.row.value : ""
+        color: showcase.ink
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.displayLarge
+        font.bold: true
+        Layout.alignment: Qt.AlignVCenter
+        Behavior on color { ColorAnimation { duration: 220 } }
+      }
+
+      Text {
+        visible: text !== ""
+        text: (showcase.row ? showcase.row.hint : "").toUpperCase()
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+        font.letterSpacing: 1.2
+        elide: Text.ElideRight
+        Layout.fillWidth: true
+        Layout.alignment: Qt.AlignVCenter
+        horizontalAlignment: Text.AlignRight
+      }
+    }
+
+    Item {
+      width: parent.width
+      height: Style.space(8)
+
+      Rectangle {
+        anchors.fill: parent
+        radius: height / 2
+        color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.12)
+      }
+
+      Rectangle {
+        width: Math.round((showcase.pct / 100) * parent.width)
+        height: parent.height
+        radius: height / 2
+        color: showcase.ink
+        Behavior on width { NumberAnimation { duration: 480; easing.type: Easing.OutCubic } }
+        Behavior on color { ColorAnimation { duration: 220 } }
+      }
+
+      Rectangle {
+        visible: showcase.pct > 0
+        x: parent.width * 0.75 - 0.5
+        width: 1
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        color: root.barForeground
+        opacity: 0.45
+      }
+    }
+
+    Row {
+      width: parent.width
+      spacing: Style.space(8)
+
+      StepMeter {
+        count: 5
+        step: showcase.row ? showcase.row.step : 0
+        tone: showcase.row ? showcase.row.tone : "neutral"
+        live: showcase.live
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        text: "READINESS"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+        font.letterSpacing: 1.2
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
+  }
+
   component MetricTile: Item {
     id: tile
     property string icon: ""
@@ -705,6 +841,24 @@ Panel {
     }
   }
 
+  // The card height follows the content's implicit height. On paper the
+  // binding on KeyboardPanel.contentHeight does this alone, but the panel
+  // is built inside a Loader while hidden, and async font metrics grow
+  // the content without the positioner's implicitHeightChanged firing
+  // (verified live: one signal at first layout, none for the font delta).
+  // Sync imperatively from three drivers: the (working) implicitHeight
+  // signal, a settle timer once fonts have loaded after open, and view
+  // switches, which restructure the whole column.
+  function syncCardHeight() {
+    panel.contentHeight = panel.fittedContentHeight(content.implicitHeight, Style.space(760))
+  }
+
+  Timer {
+    id: fontSettle
+    interval: 400
+    onTriggered: root.syncCardHeight()
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -713,7 +867,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(480))
-    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(620))
+    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(760))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -755,6 +909,7 @@ Panel {
           id: content
           width: panelFlick.width
           spacing: Style.space(14)
+          onImplicitHeightChanged: Qt.callLater(root.syncCardHeight)
 
         RowLayout {
           visible: root.view === "settings" || root.showLogin
@@ -925,9 +1080,48 @@ Panel {
           }
 
           Column {
-            visible: root.showRecovery && (root.groups.recovery.length > 0 || root.hrvBand)
+            visible: root.todayShown
             width: parent.width
             spacing: Style.space(6)
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "TODAY"
+              foreground: root.barForeground
+              fontFamily: root.fontFamily
+              font.letterSpacing: 1.2
+            }
+
+            Repeater {
+              model: root.planRows
+              MetricTile {
+                required property var modelData
+                width: parent.width
+                icon: modelData.icon
+                label: modelData.label
+                value: modelData.value
+                hint: modelData.hint
+                steps: modelData.steps
+                step: modelData.step
+                tone: modelData.tone
+                marquee: true
+              }
+            }
+
+            ReadinessShowcase {
+              row: root.readinessRow
+            }
+          }
+
+          Column {
+            visible: root.recoveryShown
+            width: parent.width
+            spacing: Style.space(6)
+
+            PanelSeparator {
+              visible: root.todayShown
+              foreground: root.barForeground
+            }
 
             PanelSectionHeader {
               width: parent.width
@@ -971,12 +1165,12 @@ Panel {
           }
 
           Column {
-            visible: root.showLoad && (root.groups.load.length > 0 || root.groups.bars.length > 0)
+            visible: root.loadShown
             width: parent.width
             spacing: Style.space(6)
 
             PanelSeparator {
-              visible: root.showRecovery && root.groups.recovery.length > 0
+              visible: root.recoveryShown
               foreground: root.barForeground
             }
 
@@ -1028,6 +1222,48 @@ Panel {
                 mark: modelData.mark
               }
             }
+          }
+
+          Column {
+            visible: root.predictShown
+            width: parent.width
+            spacing: Style.space(6)
+
+            PanelSeparator {
+              visible: root.todayShown || root.recoveryShown || root.loadShown
+              foreground: root.barForeground
+            }
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "PREDICTED"
+              foreground: root.barForeground
+              fontFamily: root.fontFamily
+              font.letterSpacing: 1.2
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(12)
+
+              Repeater {
+                model: root.groups.predict
+                MetricTile {
+                  required property var modelData
+                  width: root.metricTileWidth(parent)
+                  icon: modelData.icon
+                  label: modelData.label
+                  value: modelData.value
+                  hint: modelData.hint
+                  tone: modelData.tone
+                }
+              }
+            }
+          }
+
+          PanelSeparator {
+            visible: root.predictShown && root.groups.activity.length > 0
+            foreground: root.barForeground
           }
 
           Repeater {
@@ -1103,7 +1339,9 @@ Panel {
               { value: "hrv", label: "HRV" },
               { value: "rhr", label: "RHR" },
               { value: "load", label: "Load" },
-              { value: "fatigue", label: "Fatigue" }
+              { value: "fatigue", label: "Fatigue" },
+              { value: "readiness", label: "Readiness" },
+              { value: "race", label: "Race" }
             ]
             value: root.client ? root.client.barMetric : "hrv"
             foreground: root.barForeground
@@ -1172,6 +1410,21 @@ Panel {
             text: "PANEL"
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Today"
+            description: "Planned workout and readiness."
+            checked: root.client ? root.client.showToday : true
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            titleSize: Style.font.body
+            hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "today"
+            onHovered: function(on) { if (on) root.setCursor("today") }
+            onClicked: {
+              if (root.client) root.client.writeSetting("showToday", !root.client.showToday)
+            }
           }
 
           Toggle {

@@ -1,6 +1,6 @@
 .pragma library
 
-var PLUGIN_VERSION = "0.1.0"
+var PLUGIN_VERSION = "0.2.0"
 var PROJECT_URL = "https://github.com/astorrer/omarchy-coros"
 var REFRESH_MIN_MINUTES = 15
 var REFRESH_MAX_MINUTES = 1440
@@ -59,6 +59,15 @@ function parseSnapshot(raw) {
     balance: num(parsed.balance),
     fatigue: num(parsed.fatigue),
     fatigueState: num(parsed.fatigueState),
+    readiness: num(parsed.readiness),
+    recoveryHours: num(parsed.recoveryHours),
+    race5k: num(parsed.race5k),
+    race10k: num(parsed.race10k),
+    raceHalf: num(parsed.raceHalf),
+    raceMarathon: num(parsed.raceMarathon),
+    plan: str(parsed.plan),
+    planKm: num(parsed.planKm),
+    planMin: num(parsed.planMin),
     activity: str(parsed.activity),
     activityDay: str(parsed.activityDay),
     day: str(parsed.day),
@@ -104,6 +113,9 @@ function isEmpty(snapshot) {
     && num(snapshot.load) === null
     && num(snapshot.load7d) === null
     && num(snapshot.fatigue) === null
+    && num(snapshot.readiness) === null
+    && num(snapshot.raceMarathon) === null
+    && str(snapshot.plan) === null
     && str(snapshot.activity) === null
 }
 
@@ -172,6 +184,80 @@ function activityIcon(name) {
 function withState(value, label) {
   if (value === null || value === undefined || value === "") return ""
   return label ? String(value) + " · " + label : String(value)
+}
+
+function formatRace(seconds) {
+  var n = num(seconds)
+  if (n === null || n <= 0) return ""
+  n = Math.round(n)
+  var h = Math.floor(n / 3600)
+  var m = Math.floor((n % 3600) / 60)
+  var s = n % 60
+  var mm = (m < 10 ? "0" : "") + m
+  var ss = (s < 10 ? "0" : "") + s
+  return h > 0 ? h + ":" + mm + ":" + ss : m + ":" + ss
+}
+
+var RACE_ORDER = [
+  { key: "race5k", label: "5K", short: "5K" },
+  { key: "race10k", label: "10K", short: "10K" },
+  { key: "raceHalf", label: "Half", short: "HM" },
+  { key: "raceMarathon", label: "Marathon", short: "M" }
+]
+
+function bestRace(snapshot) {
+  for (var i = RACE_ORDER.length - 1; i >= 0; i--) {
+    var secs = num(snapshot ? snapshot[RACE_ORDER[i].key] : null)
+    if (secs !== null && secs > 0) return { spec: RACE_ORDER[i], seconds: secs }
+  }
+  return null
+}
+
+function formatRaceShort(seconds) {
+  var n = num(seconds)
+  if (n === null || n <= 0) return ""
+  n = Math.round(n)
+  var h = Math.floor(n / 3600)
+  var m = Math.floor((n % 3600) / 60)
+  return h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : m + ":" + (n % 60 < 10 ? "0" : "") + (n % 60)
+}
+
+function readinessTone(pct) {
+  var n = num(pct)
+  if (n === null) return "neutral"
+  if (n >= 75) return "good"
+  if (n <= 40) return "bad"
+  return "neutral"
+}
+
+function readinessStep(pct) {
+  var n = num(pct)
+  return n === null ? 0 : Math.max(1, Math.min(5, Math.ceil(n / 20)))
+}
+
+function readinessIcon(pct) {
+  var n = num(pct)
+  if (n === null) return ICON.battery50
+  if (n >= 80) return ICON.batteryFull
+  if (n >= 60) return ICON.battery80
+  if (n >= 40) return ICON.battery50
+  if (n >= 20) return ICON.battery20
+  return ICON.batteryEmpty
+}
+
+function recoveryEtaText(hours) {
+  var n = num(hours)
+  if (n === null) return ""
+  if (n <= 0) return "Fully recovered"
+  if (n < 1) return "Full in " + Math.max(1, Math.round(n * 60)) + " min"
+  var whole = Math.floor(n)
+  var frac = n - whole
+  var tail = ""
+  if (frac >= 0.125 && frac < 0.375) tail = "¼"
+  else if (frac >= 0.375 && frac < 0.625) tail = "½"
+  else if (frac >= 0.625 && frac < 0.875) tail = "¾"
+  else if (frac >= 0.875) whole += 1
+  return "Full in " + whole + tail + " h"
 }
 
 function formatTick(value) {
@@ -262,7 +348,16 @@ function heroMood(snapshot) {
 }
 
 function heroPhrases(snapshot) {
-  return HERO_PHRASES[heroMood(snapshot)] || []
+  var phrases = (HERO_PHRASES[heroMood(snapshot)] || []).slice()
+  if (!signedIn(snapshot) || isEmpty(snapshot)) return phrases
+  var readiness = num(snapshot.readiness)
+  if (readiness !== null) phrases.push("Readiness " + Math.round(readiness) + "%")
+  var plan = str(snapshot.plan)
+  if (plan) {
+    var km = num(snapshot.planKm)
+    phrases.push("Today · " + plan + (km !== null ? " " + km + " km" : ""))
+  }
+  return phrases
 }
 
 function metricRow(spec) {
@@ -285,15 +380,58 @@ function metricRow(spec) {
 }
 
 function metricGroups(snapshot, groups) {
-  var empty = { recovery: [], load: [], bars: [], activity: [] }
+  var empty = { recovery: [], load: [], bars: [], activity: [], today: [], predict: [] }
   if (!signedIn(snapshot)) return empty
   var recoveryOn = !groups || groups.recovery !== false
   var loadOn = !groups || groups.load !== false
   var activityOn = !groups || groups.activity !== false
-  var out = { recovery: [], load: [], bars: [], activity: [] }
+  var todayOn = !groups || groups.today !== false
+  var out = { recovery: [], load: [], bars: [], activity: [], today: [], predict: [] }
   function add(list, spec) {
     var row = metricRow(spec)
     if (row) list.push(row)
+  }
+  if (todayOn) {
+    var plan = str(snapshot.plan)
+    if (plan) {
+      var planValue = plan
+      var planKm = num(snapshot.planKm)
+      var planMin = num(snapshot.planMin)
+      if (planKm !== null) planValue += " · " + planKm + " km"
+      if (planMin !== null) planValue += " · " + planMin + " min"
+      add(out.today, {
+        id: "plan",
+        icon: activityIcon(plan),
+        label: "Today's plan",
+        value: planValue
+      })
+    }
+    var readiness = num(snapshot.readiness)
+    if (readiness !== null) {
+      add(out.today, {
+        id: "readiness",
+        icon: readinessIcon(readiness),
+        label: "Readiness",
+        value: Math.round(readiness) + "%",
+        hint: recoveryEtaText(snapshot.recoveryHours),
+        steps: 5,
+        step: readinessStep(readiness),
+        tone: readinessTone(readiness),
+        lo: 0,
+        hi: 100,
+        pos: readiness
+      })
+    }
+  }
+  for (var r = 0; r < RACE_ORDER.length; r++) {
+    var secs = num(snapshot[RACE_ORDER[r].key])
+    if (secs !== null && secs > 0)
+      add(out.predict, {
+        id: RACE_ORDER[r].key,
+        icon: ICON.activity,
+        label: RACE_ORDER[r].label,
+        value: formatRace(secs)
+      })
   }
   if (recoveryOn) {
     var rhrHint = ""
@@ -327,7 +465,7 @@ function metricGroups(snapshot, groups) {
     add(out.load, {
       id: "load",
       icon: ICON.load,
-      label: "Today",
+      label: "Daily",
       value: snapshot.load
     })
     var d7 = num(snapshot.load7d)
@@ -394,12 +532,13 @@ function metricGroups(snapshot, groups) {
 
 function metricRows(snapshot, groups) {
   var g = metricGroups(snapshot, groups)
-  return g.recovery.concat(g.load, g.bars, g.activity)
+  return g.today.concat(g.recovery, g.load, g.bars, g.predict, g.activity)
 }
 
 function validBarMetric(value) {
   var v = String(value === undefined || value === null ? "" : value).trim().toLowerCase()
-  if (v === "icon" || v === "hrv" || v === "rhr" || v === "load" || v === "fatigue") return v
+  if (v === "icon" || v === "hrv" || v === "rhr" || v === "load" || v === "fatigue" || v === "readiness" || v === "race")
+    return v
   return "hrv"
 }
 
@@ -421,6 +560,12 @@ function formatBar(snapshot, metric) {
       var fat = fatigueStateLabel(snapshot.fatigueState)
       if (fat) return fat
       if (num(snapshot.fatigue) !== null) return String(snapshot.fatigue)
+    } else if (metric === "readiness") {
+      var readiness = num(snapshot.readiness)
+      if (readiness !== null) return "Ready " + Math.round(readiness) + "%"
+    } else if (metric === "race") {
+      var best = bestRace(snapshot)
+      if (best) return best.spec.short + " " + formatRaceShort(best.seconds)
     }
     return formatSnapshot(snapshot)
   } catch (e) {
@@ -539,6 +684,16 @@ function formatTooltip(snapshot) {
     if (load !== null) parts.push("Load " + load)
     var load7d = num(snapshot.load7d)
     if (load7d !== null) parts.push("7d " + load7d)
+    var readiness = num(snapshot.readiness)
+    if (readiness !== null) {
+      var eta = recoveryEtaText(snapshot.recoveryHours)
+      parts.push("Ready " + Math.round(readiness) + "%" + (eta ? " · " + eta : ""))
+    }
+    var plan = str(snapshot.plan)
+    if (plan) {
+      var planKm = num(snapshot.planKm)
+      parts.push("Today " + plan + (planKm !== null ? " " + planKm + " km" : ""))
+    }
     var fatigue = fatigueStateLabel(snapshot.fatigueState)
     if (fatigue) parts.push(fatigue)
     var activity = str(snapshot.activity)
