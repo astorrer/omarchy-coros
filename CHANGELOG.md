@@ -1,7 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-09-23
 
+- Today's planned workout from the Training Hub schedule (`/training/schedule/query`):
+  full-width tile with a sport glyph, kilometers, and minutes; long plan
+  names marquee like last-activity. Deleted schedule entries are skipped and
+  the earliest of the day wins.
+- Readiness from `/dashboard/query`: recovery percent as a battery glyph with
+  a five-dot meter (accent ≥ 75, urgent ≤ 40) and a full-recovery estimate
+  ("Full in 6½ h", "Fully recovered").
+- Race predictions (5K, 10K, half, marathon) as a PREDICTED section, plus a
+  `race` bar metric that shows the longest known distance (e.g. "M 3:21").
+- New `readiness` bar metric ("Ready 82%"); tooltip and rotating hero phrases
+  pick up readiness and today's plan.
+- New `showToday` setting (default on) toggling the TODAY section; schema and
+  defaults updated in step.
+- The dashboard and schedule fetches are best-effort: a failure or non-zero
+  result leaves those keys null and never sinks the snapshot.
 - Marketplace security fixes: panel-launched `coros.py` helpers now run
   `/usr/bin/python3` over a fixed system PATH with a cleared environment
   (only HOME/XDG bases), so a planted `python3` on a user-writable PATH can

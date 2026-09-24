@@ -2,8 +2,9 @@
 
 COROS recovery metrics on the Omarchy bar. Sign in to your COROS Training
 Hub account from the panel — nothing is hosted. The bar shows one compact
-metric; the panel shows overnight HRV vs band, resting HR, fatigue, training
-load, and the last activity.
+metric; the panel shows today's planned workout and readiness, overnight
+HRV vs band, resting HR, fatigue, training load, race predictions, and the
+last activity.
 
 ![Omarchy-coros panel](preview.png)
 
@@ -33,10 +34,14 @@ install.
 Click the bar widget to open or close the panel. Escape closes it (or goes
 Back from settings). Tab / Shift+Tab switches to the next bar panel.
 
-- The bar shows one metric (`HRV 24` by default), the COROS mark, or
-  fatigue. Hover for a tooltip.
+- The bar shows one metric (`HRV 24` by default), the COROS mark, fatigue,
+  readiness, or a race prediction. Hover for a tooltip.
+- Today: the scheduled workout (name, km, minutes) and readiness with the
+  full-recovery estimate. Optional — both fetches degrade to null on
+  failure and never sink the snapshot.
 - Overnight: HRV vs the Training Hub band, resting HR, fatigue, balance.
 - Load: today, 7/28-day, acute/chronic, load ratio, weekly target.
+- Predicted: 5K, 10K, half, and marathon race times.
 - Last activity marquees if the name is longer than the row.
 
 If logins fail on both regions, polls back off for an hour. Network errors
@@ -55,10 +60,11 @@ Open settings from the gear in the panel, or Omarchy Settings → Bar → COROS:
 | `refreshIntervalMin` | integer | 30      | Snapshot poll interval (15 min–24 h)         |
 | `region`             | string  | `"eu"`  | Training Hub region, `eu` or `us`            |
 | `hideWhenNoData`     | boolean | false   | Hide the widget from the bar when empty      |
+| `showToday`          | boolean | true    | Panel: today's plan and readiness            |
 | `showRecovery`       | boolean | true    | Panel: HRV, RHR, balance, fatigue            |
 | `showLoad`           | boolean | true    | Panel: daily and rolling training load       |
 | `showActivity`       | boolean | true    | Panel: last workout                          |
-| `barMetric`          | string  | `"hrv"` | Bar: `icon`, `hrv`, `rhr`, `load`, `fatigue` |
+| `barMetric`          | string  | `"hrv"` | Bar: `icon`, `hrv`, `rhr`, `load`, `fatigue`, `readiness`, `race` |
 
 ## Remove
 

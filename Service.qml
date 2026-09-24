@@ -22,6 +22,7 @@ Item {
   readonly property bool showRecovery: setting("showRecovery", true) !== false
   readonly property bool showLoad: setting("showLoad", true) !== false
   readonly property bool showActivity: setting("showActivity", true) !== false
+  readonly property bool showToday: setting("showToday", true) !== false
   readonly property string barMetric: Model.validBarMetric(setting("barMetric", "hrv"))
   readonly property string helperPath: decodeURIComponent(Qt.resolvedUrl("coros.py").toString().replace(/^file:\/\//, ""))
   readonly property var helperEnv: Model.helperEnvironment(

@@ -25,8 +25,8 @@ Panel {
   property int metricIndex: 1
   property int intervalIndex: 0
   readonly property var loginRegions: ["us", "eu"]
-  readonly property var barMetrics: ["icon", "hrv", "rhr", "load", "fatigue"]
-  readonly property var settingsSections: ["back", "metric", "hide", "interval", "overnight", "load", "activity", "account", "signout"]
+  readonly property var barMetrics: ["icon", "hrv", "rhr", "load", "fatigue", "readiness", "race"]
+  readonly property var settingsSections: ["back", "metric", "hide", "interval", "today", "overnight", "load", "activity", "account", "signout"]
 
   property var client: null
   readonly property var snapshot: client ? client.snapshot : null
@@ -58,6 +58,7 @@ Panel {
   readonly property bool showRecovery: !client || client.showRecovery
   readonly property bool showLoad: !client || client.showLoad
   readonly property bool showActivity: !client || client.showActivity
+  readonly property bool showToday: !client || client.showToday
   readonly property string hrvToneName: snapshot ? Model.hrvTone(snapshot) : "neutral"
   readonly property string heroMood: snapshot ? Model.heroMood(snapshot) : "idle"
   readonly property var heroPhraseList: snapshot ? Model.heroPhrases(snapshot) : []
@@ -78,8 +79,13 @@ Panel {
   readonly property var groups: Model.metricGroups(snapshot, {
     recovery: showRecovery,
     load: showLoad,
-    activity: showActivity
+    activity: showActivity,
+    today: showToday
   })
+  readonly property bool todayShown: showToday && groups.today.length > 0
+  readonly property bool predictShown: groups.predict.length > 0
+  readonly property bool recoveryShown: showRecovery && (groups.recovery.length > 0 || hrvBand !== null)
+  readonly property bool loadShown: showLoad && (groups.load.length > 0 || groups.bars.length > 0)
 
   function toneColor(tone) {
     if (tone === "good") return Color.accent
@@ -246,6 +252,8 @@ Panel {
         if (client) client.writeSetting("hideWhenNoData", !client.hideWhenNoData)
       } else if (focusSection === "interval") {
         bumpRefresh(intervalIndex === 0 ? -1 : 1)
+      } else if (focusSection === "today") {
+        if (client) client.writeSetting("showToday", !client.showToday)
       } else if (focusSection === "overnight") {
         if (client) client.writeSetting("showRecovery", !client.showRecovery)
       } else if (focusSection === "load") {
@@ -925,9 +933,44 @@ Panel {
           }
 
           Column {
-            visible: root.showRecovery && (root.groups.recovery.length > 0 || root.hrvBand)
+            visible: root.todayShown
             width: parent.width
             spacing: Style.space(6)
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "TODAY"
+              foreground: root.barForeground
+              fontFamily: root.fontFamily
+              font.letterSpacing: 1.2
+            }
+
+            Repeater {
+              model: root.groups.today
+              MetricTile {
+                required property var modelData
+                width: parent.width
+                icon: modelData.icon
+                label: modelData.label
+                value: modelData.value
+                hint: modelData.hint
+                steps: modelData.steps
+                step: modelData.step
+                tone: modelData.tone
+                marquee: modelData.id === "plan"
+              }
+            }
+          }
+
+          Column {
+            visible: root.recoveryShown
+            width: parent.width
+            spacing: Style.space(6)
+
+            PanelSeparator {
+              visible: root.todayShown
+              foreground: root.barForeground
+            }
 
             PanelSectionHeader {
               width: parent.width
@@ -971,12 +1014,12 @@ Panel {
           }
 
           Column {
-            visible: root.showLoad && (root.groups.load.length > 0 || root.groups.bars.length > 0)
+            visible: root.loadShown
             width: parent.width
             spacing: Style.space(6)
 
             PanelSeparator {
-              visible: root.showRecovery && root.groups.recovery.length > 0
+              visible: root.recoveryShown
               foreground: root.barForeground
             }
 
@@ -1028,6 +1071,48 @@ Panel {
                 mark: modelData.mark
               }
             }
+          }
+
+          Column {
+            visible: root.predictShown
+            width: parent.width
+            spacing: Style.space(6)
+
+            PanelSeparator {
+              visible: root.todayShown || root.recoveryShown || root.loadShown
+              foreground: root.barForeground
+            }
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "PREDICTED"
+              foreground: root.barForeground
+              fontFamily: root.fontFamily
+              font.letterSpacing: 1.2
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(12)
+
+              Repeater {
+                model: root.groups.predict
+                MetricTile {
+                  required property var modelData
+                  width: root.metricTileWidth(parent)
+                  icon: modelData.icon
+                  label: modelData.label
+                  value: modelData.value
+                  hint: modelData.hint
+                  tone: modelData.tone
+                }
+              }
+            }
+          }
+
+          PanelSeparator {
+            visible: root.predictShown && root.groups.activity.length > 0
+            foreground: root.barForeground
           }
 
           Repeater {
@@ -1103,7 +1188,9 @@ Panel {
               { value: "hrv", label: "HRV" },
               { value: "rhr", label: "RHR" },
               { value: "load", label: "Load" },
-              { value: "fatigue", label: "Fatigue" }
+              { value: "fatigue", label: "Fatigue" },
+              { value: "readiness", label: "Readiness" },
+              { value: "race", label: "Race" }
             ]
             value: root.client ? root.client.barMetric : "hrv"
             foreground: root.barForeground
@@ -1172,6 +1259,21 @@ Panel {
             text: "PANEL"
             foreground: root.barForeground
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Today"
+            description: "Planned workout and readiness."
+            checked: root.client ? root.client.showToday : true
+            foreground: root.barForeground
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            titleSize: Style.font.body
+            hasCursor: root.cursorActive && root.view === "settings" && root.focusSection === "today"
+            onHovered: function(on) { if (on) root.setCursor("today") }
+            onClicked: {
+              if (root.client) root.client.writeSetting("showToday", !root.client.showToday)
+            }
           }
 
           Toggle {

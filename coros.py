@@ -42,6 +42,8 @@ DEFAULT_INTERVAL_S = 30
 MAX_BODY_BYTES = 2 * 1024 * 1024
 LOGIN_BODY_MAX = 64 * 1024  # {email,password,region} from the panel is tiny
 ACTIVITY_NAME_MAX = 120
+# /dashboard/query race types: 1 marathon, 2 half, 4 10K, 5 5K.
+RACE_KEYS = {1: "raceMarathon", 2: "raceHalf", 4: "race10k", 5: "race5k"}
 ALLOWED_HOSTS = frozenset(urllib.parse.urlparse(url).hostname for url in BASES.values())
 
 NULL_SNAPSHOT = {
@@ -64,6 +66,15 @@ NULL_SNAPSHOT = {
     "balance": None,
     "fatigue": None,
     "fatigueState": None,
+    "readiness": None,
+    "recoveryHours": None,
+    "race5k": None,
+    "race10k": None,
+    "raceHalf": None,
+    "raceMarathon": None,
+    "plan": None,
+    "planKm": None,
+    "planMin": None,
     "activity": None,
     "activityDay": None,
     "day": None,
@@ -488,6 +499,102 @@ def last_activity(resp):
     return name, iso_day(item.get("date"))
 
 
+def dashboard_fields(resp):
+    """Readiness, recovery clock, and race predictions from /dashboard/query."""
+    if not isinstance(resp, dict):
+        resp = {}
+    data = resp.get("data")
+    summary = data.get("summaryInfo") if isinstance(data, dict) else None
+    summary = summary if isinstance(summary, dict) else {}
+    fields = {key: None for key in RACE_KEYS.values()}
+    fields["readiness"] = num(summary.get("recoveryPct"))
+    fields["recoveryHours"] = num(summary.get("fullRecoveryHours"))
+    scores = summary.get("runScoreList")
+    for item in scores if isinstance(scores, list) else []:
+        if not isinstance(item, dict):
+            continue
+        race = RACE_KEYS.get(num(item.get("type", item.get("raceType"))))
+        if race is None:
+            continue
+        for key in ("duration", "predictSecond", "predictTime", "time"):
+            seconds = num(item.get(key))
+            if seconds is not None:
+                break
+        if seconds is not None and seconds > 0:
+            fields[race] = int(round(seconds))
+    return fields
+
+
+def plan_program(entity, programs):
+    """A schedule entity's program: planId|idInPlan first, then planProgramId."""
+    id_in_plan = str(entity.get("idInPlan") or "")
+    plan_id = str(entity.get("planId") or "")
+    plan_program_id = str(entity.get("planProgramId") or "")
+    for program in programs:
+        if not isinstance(program, dict):
+            continue
+        same_plan = not plan_id or str(program.get("planId") or "") == plan_id
+        if id_in_plan and str(program.get("idInPlan") or "") == id_in_plan and same_plan:
+            return program
+    for program in programs:
+        if isinstance(program, dict) and plan_program_id and str(program.get("id") or "") == plan_program_id:
+            return program
+    return None
+
+
+def plan_distance_cm(entity, program):
+    sport = entity.get("sportData")
+    for source in (sport if isinstance(sport, dict) else {}, program or {}):
+        for key in ("distance", "planDistance", "estimatedDistance"):
+            cm = num(source.get(key))
+            if cm is not None and cm > 0:
+                return cm
+    return None
+
+
+def plan_duration_s(entity, program):
+    for source in (program or {}, entity):
+        for key in ("planDuration", "duration", "estimatedTime"):
+            seconds = num(source.get(key))
+            if seconds is not None and seconds > 0:
+                return seconds
+    return None
+
+
+def plan_fields(resp):
+    """Today's planned workout (name, km, minutes) from /training/schedule/query."""
+    data = resp.get("data") if isinstance(resp, dict) else None
+    if not isinstance(data, dict):
+        return None, None, None
+    entities = [e for e in data.get("entities") or [] if isinstance(e, dict)]
+    entities = [e for e in entities if num(e.get("status")) != 3]
+    if not entities:
+        return None, None, None
+
+    def sort_no(entity):
+        n = num(entity.get("sortNoInSchedule", entity.get("sortNo")))
+        return n if n is not None else 0
+
+    entity = sorted(entities, key=sort_no)[0]
+    programs = [p for p in data.get("programs") or [] if isinstance(p, dict)]
+    program = plan_program(entity, programs)
+    sport = entity.get("sportData")
+    sport = sport if isinstance(sport, dict) else {}
+    name = None
+    for source in (sport, program or {}, entity):
+        value = source.get("name")
+        if isinstance(value, str) and value.strip():
+            name = value.strip()[:ACTIVITY_NAME_MAX]
+            break
+    cm = plan_distance_cm(entity, program)
+    km = round(cm / 100000, 1) if cm else None
+    seconds = plan_duration_s(entity, program)
+    minutes = int(round(seconds / 60)) if seconds else None
+    if name is None and km is None and minutes is None:
+        return None, None, None
+    return name, km, minutes
+
+
 def num(value):
     if isinstance(value, bool):
         return None
@@ -522,7 +629,7 @@ def week_entry(resp):
     return weeks[-1] if weeks else {}
 
 
-def parse_snapshot(day, activity, activity_day=None, week=None):
+def parse_snapshot(day, activity, activity_day=None, week=None, dash=None, plan=None):
     day = day if isinstance(day, dict) else {}
     week = week if isinstance(week, dict) else {}
     if isinstance(activity, str):
@@ -535,7 +642,7 @@ def parse_snapshot(day, activity, activity_day=None, week=None):
         rhr = test_rhr
     band_low, band_high = hrv_band(day)
     ratio = num(day.get("trainingLoadRatio"))
-    return {
+    snap = {
         "hrv": num(day.get("avgSleepHrv")),
         "hrvBaseline": num(day.get("sleepHrvBase")),
         "hrvBandLow": band_low,
@@ -560,6 +667,12 @@ def parse_snapshot(day, activity, activity_day=None, week=None):
         "day": iso_day(day.get("happenDay") or day.get("date") or day.get("day")),
         "error": None,
     }
+    snap.update(dashboard_fields(dash))
+    plan_name, plan_km, plan_min = plan_fields(plan)
+    snap["plan"] = plan_name
+    snap["planKm"] = plan_km
+    snap["planMin"] = plan_min
+    return snap
 
 
 def ymd(ts):
@@ -603,7 +716,24 @@ def get_snapshot(region):
                 + urllib.parse.urlencode({"size": 10, "pageNumber": 1, "startDay": week_ago, "endDay": today})
             )
         )
-        return parse_snapshot(day_entry(detail), activity, activity_day, week_entry(detail))
+
+        def soft(path):
+            """Read-only extras: dashboard and schedule never sink the snapshot."""
+            try:
+                resp = get(path)
+            except Exception as exc:  # noqa: BLE001 - degrade to nulls, keep polling
+                eprint("coros.py: optional fetch failed: " + str(exc))
+                return None
+            return resp if result_code(resp) in (None, 0) else None
+
+        # /dashboard/query: readiness, full-recovery clock, race predictions.
+        dash = soft("/dashboard/query")
+        # Schedule params are startDate/endDate (camelCase), unlike dayDetail.
+        schedule = soft(
+            "/training/schedule/query?"
+            + urllib.parse.urlencode({"startDate": today, "endDate": today, "supportRestExercise": 1})
+        )
+        return parse_snapshot(day_entry(detail), activity, activity_day, week_entry(detail), dash, schedule)
     except ValueError as exc:  # login rejected on both regions: back off, don't hammer
         eprint("coros.py: login failed: " + str(exc))
         trip_cooldown()

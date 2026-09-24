@@ -131,6 +131,15 @@ def default_snapshot(**over):
             "balance": 10.0,
             "fatigue": -5.0,
             "fatigueState": 2,
+            "readiness": 82,
+            "recoveryHours": 6.5,
+            "race5k": 1172,
+            "race10k": 2458,
+            "raceHalf": 5464,
+            "raceMarathon": 12084,
+            "plan": "Tempo Run",
+            "planKm": 8.0,
+            "planMin": 46,
             "activity": "Run 10k",
             "activityDay": "2026-09-07",
             "day": "2026-09-10",
@@ -148,12 +157,54 @@ def activity_payload(name="Run 10k", date=20260907):
     return {"result": 0, "data": {"dataList": [item]}}
 
 
+def dashboard_payload(summary=None, **fields):
+    base = {
+        "recoveryPct": 82,
+        "fullRecoveryHours": 6.5,
+        "runScoreList": [
+            {"type": 5, "duration": 1172},
+            {"type": 4, "predictSecond": 2458},
+            {"type": 2, "time": 5464},
+            {"type": 1, "predictTime": 12084},
+        ],
+    }
+    if isinstance(summary, dict):
+        base = summary
+    base.update(fields)
+    return {"result": 0, "data": {"summaryInfo": base}}
+
+
+def schedule_payload(entities="default", programs="default"):
+    if entities == "default":
+        entities = [
+            {
+                "happenDay": 20260923,
+                "idInPlan": 11,
+                "planId": 3,
+                "planProgramId": 71,
+                "status": 1,
+                "sortNoInSchedule": 1,
+                "sportData": {"name": "Tempo Run", "distance": 800000},
+            }
+        ]
+    if programs == "default":
+        programs = [{"id": 71, "idInPlan": 11, "planId": 3, "name": "Library Tempo", "sportType": 1, "planDuration": 2760}]
+    return {"result": 0, "data": {"entities": entities, "programs": programs}}
+
+
+def extras_routes(count=1):
+    return [
+        ("dashboard/query", [dashboard_payload()] * count),
+        ("training/schedule/query", [schedule_payload()] * count),
+    ]
+
+
 def full_routes():
     return [
         ("account/login", [login_payload()]),
         ("dayDetail", [day_payload()]),
         ("activity/query", [activity_payload()]),
-    ]
+    ] + extras_routes()
 
 
 class CorosTest(unittest.TestCase):
@@ -236,7 +287,7 @@ class CorosTest(unittest.TestCase):
                 ("account/login", [login_payload()]),
                 ("dayDetail", [payload]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -248,7 +299,7 @@ class CorosTest(unittest.TestCase):
                 ("account/login", [login_payload("tok-A"), login_payload("tok-B")]),
                 ("dayDetail", [{"result": 1019, "message": "token expired"}, day_payload()]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -265,7 +316,7 @@ class CorosTest(unittest.TestCase):
                 ("teamapi.coros.com/account/login", [login_payload("us-tok")]),
                 ("dayDetail", [day_payload()]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot", "--region", "eu"])
         self.assertEqual(code, 0)
@@ -284,7 +335,7 @@ class CorosTest(unittest.TestCase):
                 ("teamapi.coros.com/account/login", [login_payload("us-tok")]),
                 ("dayDetail", [day_payload(), day_payload()]),
                 ("activity/query", [activity_payload(), activity_payload()]),
-            ]
+            ] + extras_routes(2)
         )
         for _ in range(2):
             code, out, _ = self.run_cli(["snapshot", "--region", "eu"])
@@ -373,7 +424,7 @@ class CorosTest(unittest.TestCase):
                 ("account/login", [login_payload()]),
                 ("dayDetail", [payload]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -421,7 +472,7 @@ class CorosTest(unittest.TestCase):
                         }
                     ],
                 ),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -435,7 +486,7 @@ class CorosTest(unittest.TestCase):
                 ("account/login", [login_payload()]),
                 ("dayDetail", [day_payload(tib=25.0)]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -443,12 +494,178 @@ class CorosTest(unittest.TestCase):
         self.assertEqual(snap["balance"], 25.0)
         self.assertNotIn("sleepH", snap)
 
+    def test_dashboard_fields_race_sources_and_edges(self):
+        fields = coros.dashboard_fields(
+            dashboard_payload(
+                runScoreList=[
+                    {"type": 5, "duration": 1172},
+                    {"raceType": 4, "predictSecond": 2458},
+                    {"type": 2, "predictTime": 5464},
+                    {"type": 1, "time": 12084},
+                    {"type": 9, "duration": 999},
+                    {"type": 3, "duration": 0},
+                    {"type": 1, "duration": -5},
+                    {"type": 2},
+                    "junk",
+                ],
+                recoveryPct="82",
+                fullRecoveryHours=None,
+            )
+        )
+        self.assertEqual(fields["race5k"], 1172)
+        self.assertEqual(fields["race10k"], 2458)
+        self.assertEqual(fields["raceHalf"], 5464)
+        self.assertEqual(fields["raceMarathon"], 12084)
+        self.assertIsNone(fields["readiness"])  # numeric strings are not numbers
+        self.assertIsNone(fields["recoveryHours"])
+        nulls = {key: None for key in fields}
+        self.assertEqual(coros.dashboard_fields({"result": 0, "data": "x"}), nulls)
+        self.assertEqual(coros.dashboard_fields({"data": {"summaryInfo": "junk"}}), nulls)
+        self.assertEqual(coros.dashboard_fields(None), nulls)
+
+    def test_plan_program_matching(self):
+        programs = [
+            "junk",
+            {"id": 71, "idInPlan": 11, "planId": 3, "name": "ByIdInPlan"},
+            {"id": 72, "name": "ByPlanProgramId"},
+            {"id": 73, "idInPlan": 99, "planId": 9, "name": "WrongPlan"},
+        ]
+        self.assertEqual(coros.plan_program({"idInPlan": 11, "planId": 3}, programs)["name"], "ByIdInPlan")
+        self.assertEqual(coros.plan_program({"idInPlan": 11}, programs)["name"], "ByIdInPlan")
+        self.assertEqual(coros.plan_program({"planProgramId": 72}, programs)["name"], "ByPlanProgramId")
+        self.assertEqual(
+            coros.plan_program({"planProgramId": 72, "idInPlan": 11, "planId": 3}, programs)["name"],
+            "ByIdInPlan",
+        )
+        self.assertIsNone(coros.plan_program({"idInPlan": 11, "planId": 9}, programs))
+        self.assertIsNone(coros.plan_program({"idInPlan": 42, "planId": 3}, programs))
+        self.assertIsNone(coros.plan_program({}, programs))
+
+    def test_plan_fields_variants(self):
+        self.assertEqual(coros.plan_fields(schedule_payload(entities=[], programs=[])), (None, None, None))
+        self.assertEqual(coros.plan_fields(None), (None, None, None))
+        self.assertEqual(coros.plan_fields({"result": 5, "data": "x"}), (None, None, None))
+        self.assertEqual(coros.plan_fields(schedule_payload(entities=[{"idInPlan": 1}], programs=[])), (None, None, None))
+        # distance and duration come from the program when the entity is bare
+        resp = schedule_payload(
+            entities=[{"idInPlan": 12, "planId": 3, "name": "Plain Entity"}],
+            programs=[{"id": 72, "idInPlan": 12, "planId": 3, "planDistance": 500000, "estimatedTime": 3600}],
+        )
+        self.assertEqual(coros.plan_fields(resp), ("Plain Entity", 5.0, 60))
+        # entity duration only when the program has none
+        resp = schedule_payload(
+            entities=[{"idInPlan": 12, "planId": 3, "duration": 1800}],
+            programs=[{"id": 72, "idInPlan": 12, "planId": 3, "estimatedDistance": 700000}],
+        )
+        self.assertEqual(coros.plan_fields(resp), (None, 7.0, 30))
+        # sportData distance wins over the program's
+        resp = schedule_payload(
+            entities=[{"idInPlan": 12, "planId": 3, "sportData": {"distance": 800000}}],
+            programs=[{"id": 72, "idInPlan": 12, "planId": 3, "planDistance": 999999, "name": "Library Tempo"}],
+        )
+        self.assertEqual(coros.plan_fields(resp), ("Library Tempo", 8.0, None))
+        # zero distance and zero planDuration fall through to the next source
+        resp = schedule_payload(
+            entities=[{"idInPlan": 12, "planId": 3, "sportData": {"distance": 0}}],
+            programs=[{"id": 72, "idInPlan": 12, "planId": 3, "planDistance": 500000, "planDuration": 0, "duration": 2700}],
+        )
+        self.assertEqual(coros.plan_fields(resp), (None, 5.0, 45))
+        # a non-string sportData name is skipped, not stringified
+        resp = schedule_payload(
+            entities=[{"idInPlan": 11, "planId": 3, "sportData": {"name": 42}}],
+            programs=[{"id": 71, "idInPlan": 11, "planId": 3, "name": "Library Tempo"}],
+        )
+        self.assertEqual(coros.plan_fields(resp)[0], "Library Tempo")
+
+    def test_plan_sort_order_fallbacks(self):
+        # sortNo stands in when sortNoInSchedule is absent; missing sort keys sort first
+        resp = schedule_payload(
+            entities=[
+                {"idInPlan": 11, "sortNo": 9, "sportData": {"name": "Later"}},
+                {"idInPlan": 12, "sortNo": 2, "sportData": {"name": "Earlier"}},
+            ],
+            programs=[],
+        )
+        self.assertEqual(coros.plan_fields(resp)[0], "Earlier")
+        resp = schedule_payload(
+            entities=[
+                {"idInPlan": 11, "sortNoInSchedule": 3, "sportData": {"name": "Sorted"}},
+                {"idInPlan": 12, "sportData": {"name": "Unsorted"}},
+            ],
+            programs=[],
+        )
+        self.assertEqual(coros.plan_fields(resp)[0], "Unsorted")
+
+    def test_plan_name_fallbacks(self):
+        resp = schedule_payload(entities=[{"idInPlan": 11, "planId": 3}])
+        self.assertEqual(coros.plan_fields(resp)[0], "Library Tempo")
+        resp = schedule_payload(entities=[{"name": "Solo Entity"}], programs=[])
+        self.assertEqual(coros.plan_fields(resp)[0], "Solo Entity")
+        resp = schedule_payload(entities=[{"name": "P" * 200}], programs=[])
+        self.assertEqual(coros.plan_fields(resp)[0], "P" * 120)
+
+    def test_plan_skips_deleted_and_picks_earliest(self):
+        resp = schedule_payload(
+            entities=[
+                {"idInPlan": 10, "status": 3, "sortNoInSchedule": 0, "sportData": {"name": "Deleted"}},
+                {"idInPlan": 11, "sortNoInSchedule": 5, "sportData": {"name": "Later"}},
+                {"idInPlan": 12, "sortNoInSchedule": 1, "sportData": {"name": "Earlier"}},
+            ],
+            programs=[],
+        )
+        self.assertEqual(coros.plan_fields(resp)[0], "Earlier")
+
+    def test_optional_fetches_never_sink_snapshot(self):
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", [day_payload()]),
+                ("activity/query", [activity_payload()]),
+                ("dashboard/query", [urllib.error.URLError("down")]),
+                ("training/schedule/query", [{"result": 1001, "message": "no schedule"}]),
+            ]
+        )
+        code, out, err = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        snap = json.loads(out)
+        self.assertEqual(snap["hrv"], 42)
+        self.assertIsNone(snap["readiness"])
+        self.assertIsNone(snap["plan"])
+        self.assertIn("optional fetch failed", err)
+
+    def test_optional_fetches_accept_resultless_bodies(self):
+        self.fake(
+            [
+                ("account/login", [login_payload()]),
+                ("dayDetail", [day_payload()]),
+                ("activity/query", [activity_payload()]),
+                ("dashboard/query", [{"data": {"summaryInfo": {"recoveryPct": 71}}}]),
+                ("training/schedule/query", [{"data": {"entities": [], "programs": []}}]),
+            ]
+        )
+        code, out, _ = self.run_cli(["snapshot"])
+        self.assertEqual(code, 0)
+        snap = json.loads(out)
+        self.assertEqual(snap["readiness"], 71)
+        self.assertIsNone(snap["plan"])
+
+    def test_schedule_query_uses_camel_case_dates(self):
+        http = self.fake(full_routes())
+        self.run_cli(["snapshot"])
+        url = [u for u in http.calls if "schedule/query" in u][0]
+        self.assertIn("startDate=", url)
+        self.assertIn("endDate=", url)
+        self.assertIn("supportRestExercise=1", url)
+        self.assertNotIn("startDay", url)
+
     def test_nulls_on_empty(self):
         self.fake(
             [
                 ("account/login", [login_payload()]),
                 ("dayDetail", [{"result": 0, "data": {"dayList": []}}]),
                 ("activity/query", [{"result": 0, "data": {"dataList": []}}]),
+                ("dashboard/query", [dashboard_payload(summary={})]),
+                ("training/schedule/query", [schedule_payload(entities=[], programs=[])]),
             ]
         )
         code, out, _ = self.run_cli(["snapshot"])
@@ -521,7 +738,7 @@ class CorosTest(unittest.TestCase):
                     ("teameuapi.coros.com/account/login", [login_payload("us-tok", region_id=1)]),
                     ("dayDetail", [day_payload()]),
                     ("activity/query", [activity_payload()]),
-                ]
+                ] + extras_routes()
             )
             out = io.StringIO()
             err = io.StringIO()
@@ -541,7 +758,7 @@ class CorosTest(unittest.TestCase):
                 ("account/login", [login_payload(result="0000")]),
                 ("dayDetail", [day_payload()]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -553,7 +770,7 @@ class CorosTest(unittest.TestCase):
                 ("teameuapi.coros.com/account/login", [login_payload("us-tok", region_id=1)]),
                 ("dayDetail", [day_payload()]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot", "--region", "eu"])
         self.assertEqual(code, 0)
@@ -572,7 +789,7 @@ class CorosTest(unittest.TestCase):
                 ("teamapi.coros.com/account/login", [login_payload("eu-tok", region_id=3)]),
                 ("dayDetail", [day_payload()]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot", "--region", "us"])
         self.assertEqual(code, 0)
@@ -767,7 +984,7 @@ class CorosTest(unittest.TestCase):
                 ("account/login", [login_payload()]),
                 ("dayDetail", [day_payload()]),
                 ("activity/query", [activity_payload(name=long_name)]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -988,7 +1205,7 @@ class CorosTest(unittest.TestCase):
                 ("account/login", [{"result": 0, "data": {}}, login_payload()]),
                 ("dayDetail", [day_payload()]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot"])
         self.assertEqual(code, 0)
@@ -1077,7 +1294,7 @@ class CorosTest(unittest.TestCase):
                     ("teameuapi.coros.com/account/login", [login_payload()]),
                     ("dayDetail", [day_payload()]),
                     ("activity/query", [activity_payload()]),
-                ]
+                ] + extras_routes()
             )
             payload = json.dumps({"email": "u@e.c", "password": "pw", "region": "cn"})
             code, out, _ = self.run_cli(["login"], stdin_text=payload)
@@ -1131,7 +1348,7 @@ class CorosTest(unittest.TestCase):
                 ("teamapi.coros.com/account/login", [login_payload()]),
                 ("dayDetail", [day_payload()]),
                 ("activity/query", [activity_payload()]),
-            ]
+            ] + extras_routes()
         )
         code, out, _ = self.run_cli(["snapshot", "--region=us"])
         self.assertEqual(code, 0)

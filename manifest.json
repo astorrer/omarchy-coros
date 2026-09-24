@@ -2,17 +2,17 @@
   "schemaVersion": 1,
   "id": "io.github.astorrer.omarchy-coros",
   "name": "Omarchy-coros",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Aaron Storrer",
   "license": "MIT",
-  "description": "COROS recovery metrics on the Omarchy bar. Shows HRV vs baseline, resting heart rate, training load, and the last activity from your COROS Training Hub account.",
+  "description": "COROS recovery metrics on the Omarchy bar. Shows HRV vs baseline, resting heart rate, training load, today's planned workout, readiness, race predictions, and the last activity from your COROS Training Hub account.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "COROS",
-    "description": "COROS recovery metrics: HRV, resting heart rate, training load, and last activity.",
+    "description": "COROS recovery metrics: HRV, resting heart rate, training load, today's plan, readiness, race predictions, and last activity.",
     "category": "Health",
     "allowMultiple": false,
     "defaultSection": "right",
@@ -20,6 +20,7 @@
       "refreshIntervalMin": 30,
       "region": "eu",
       "hideWhenNoData": false,
+      "showToday": true,
       "showRecovery": true,
       "showLoad": true,
       "showActivity": true,
@@ -48,6 +49,12 @@
         "defaultValue": false
       },
       {
+        "key": "showToday",
+        "type": "boolean",
+        "label": "Show today's plan and readiness",
+        "defaultValue": true
+      },
+      {
         "key": "showRecovery",
         "type": "boolean",
         "label": "Show overnight recovery",
@@ -68,7 +75,7 @@
       {
         "key": "barMetric",
         "type": "string",
-        "label": "Bar display (icon, hrv, rhr, load, or fatigue)",
+        "label": "Bar display (icon, hrv, rhr, load, fatigue, readiness, or race)",
         "defaultValue": "hrv"
       }
     ]
