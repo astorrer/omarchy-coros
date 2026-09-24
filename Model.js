@@ -465,7 +465,7 @@ function metricGroups(snapshot, groups) {
     add(out.load, {
       id: "load",
       icon: ICON.load,
-      label: "Today",
+      label: "Daily",
       value: snapshot.load
     })
     var d7 = num(snapshot.load7d)
