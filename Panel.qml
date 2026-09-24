@@ -296,9 +296,12 @@ Panel {
   }
 
   onHeroMoodChanged: phraseIndex = 0
+  onViewChanged: Qt.callLater(root.syncCardHeight)
   onOpenedChanged: if (opened) {
     cursorActive = false
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+    Qt.callLater(root.syncCardHeight)
+    fontSettle.restart()
   }
 
   Timer {
@@ -838,6 +841,24 @@ Panel {
     }
   }
 
+  // The card height follows the content's implicit height. On paper the
+  // binding on KeyboardPanel.contentHeight does this alone, but the panel
+  // is built inside a Loader while hidden, and async font metrics grow
+  // the content without the positioner's implicitHeightChanged firing
+  // (verified live: one signal at first layout, none for the font delta).
+  // Sync imperatively from three drivers: the (working) implicitHeight
+  // signal, a settle timer once fonts have loaded after open, and view
+  // switches, which restructure the whole column.
+  function syncCardHeight() {
+    panel.contentHeight = panel.fittedContentHeight(content.implicitHeight, Style.space(760))
+  }
+
+  Timer {
+    id: fontSettle
+    interval: 400
+    onTriggered: root.syncCardHeight()
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -846,7 +867,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(480))
-    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(620))
+    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(760))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -888,6 +909,7 @@ Panel {
           id: content
           width: panelFlick.width
           spacing: Style.space(14)
+          onImplicitHeightChanged: Qt.callLater(root.syncCardHeight)
 
         RowLayout {
           visible: root.view === "settings" || root.showLogin
